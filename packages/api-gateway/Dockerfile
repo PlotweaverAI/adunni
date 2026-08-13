@@ -12,6 +12,7 @@ RUN npm run build --workspace @adunni/shared-types
 COPY packages/security/ ./packages/security/
 RUN npm run build --workspace @adunni/security
 COPY packages/api-gateway/ ./packages/api-gateway/
+COPY index.html ./index.html
 RUN npm run build --workspace @adunni/api-gateway
 EXPOSE 3000
 CMD ["node", "packages/api-gateway/dist/server.js"]

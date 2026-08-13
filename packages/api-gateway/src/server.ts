@@ -1,4 +1,6 @@
 import express from 'express';
+import path from 'path';
+import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import jwt from 'jsonwebtoken';
 import { Pool } from 'pg';
@@ -80,6 +82,20 @@ const server = createSecureServer(app, PORT, { certPath: TLS_CERT, keyPath: TLS_
 const wss = new WebSocketServer({ server });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: '0.1.0' }));
+
+// ── Serve frontend demo at / ──
+const FRONTEND_PATH = path.resolve(process.env.FRONTEND_PATH ?? path.join(__dirname, '..', '..', '..', 'index.html'));
+app.get('/', (_req, res) => {
+  try {
+    if (fs.existsSync(FRONTEND_PATH)) {
+      res.sendFile(FRONTEND_PATH);
+    } else {
+      res.status(404).json({ error: 'Frontend not found' });
+    }
+  } catch {
+    res.status(404).json({ error: 'Frontend not found' });
+  }
+});
 
 // ── GET /info — Public endpoint returning demo client config (no auth) ──
 app.get('/info', async (_req, res) => {
