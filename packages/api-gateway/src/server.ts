@@ -928,7 +928,10 @@ async function processUserUtteranceWithLanguage(
     }
   }
 
-  if (config) {
+  // ── TTS: send real audio only when no video conversation is active ──
+  // When video is active, Tavus echo handles speech-to-speech (face speaks with lip-sync).
+  // The mock TTS would produce garbage audio, so we skip it.
+  if (config && !videoConversation) {
     try {
       const ttsResp = await fetch(`${TTS_SERVICE_URL}/synthesize`, {
         method: 'POST',
