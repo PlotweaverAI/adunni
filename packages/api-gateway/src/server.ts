@@ -74,7 +74,7 @@ app.use(express.json({ limit: '5mb' }));
 const authMiddleware = createAuthMiddleware(JWT_SECRET);
 
 const server = createSecureServer(app, PORT, { certPath: TLS_CERT, keyPath: TLS_KEY, forceHttps: !!(TLS_CERT && TLS_KEY) });
-const wss = new WebSocketServer({ server, path: /^\/v1\/sessions\/[^/]+\/stream$/ });
+const wss = new WebSocketServer({ server });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: '0.1.0' }));
 
@@ -449,28 +449,20 @@ wss.on('connection', async (ws: WebSocket, req) => {
   let asrBuffer = '';
   let config: ClientConfig | null = null;
   let sessionActive = true;
+  let setupDone = false;
 
-  try {
-    await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/phase`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phase: 'active' as SessionPhase }),
-    });
-
-    const configResp = await fetch(`${CONFIG_SERVICE_URL}/clients/${clientId}/config`);
-    if (configResp.ok) {
-      config = await configResp.json() as ClientConfig;
-    }
-  } catch (err) {
-    console.error('[gateway] setup error:', err);
-  }
-
+  // Register message/close handlers BEFORE async setup so early messages aren't lost
   ws.on('message', async (data: Buffer) => {
+    if (!sessionActive) return;
+    // Wait for setup to complete before processing messages
+    while (!setupDone && sessionActive) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     if (!sessionActive) return;
 
     try {
       const msg = JSON.parse(data.toString());
-      
+
       if (msg.type === 'audio') {
         asrBuffer += Buffer.from(msg.audio, 'base64').toString('utf-8');
         const lines = asrBuffer.split('\n');
@@ -501,6 +493,23 @@ wss.on('connection', async (ws: WebSocket, req) => {
     }
     console.log(`[gateway] WebSocket disconnected: session=${sessionId}`);
   });
+
+  // Async setup (runs after handlers are registered)
+  try {
+    await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/phase`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phase: 'active' as SessionPhase }),
+    });
+
+    const configResp = await fetch(`${CONFIG_SERVICE_URL}/clients/${clientId}/config`);
+    if (configResp.ok) {
+      config = await configResp.json() as ClientConfig;
+    }
+  } catch (err) {
+    console.error('[gateway] setup error:', err);
+  }
+  setupDone = true;
 });
 
 async function processUserUtterance(
