@@ -33,6 +33,8 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'dev_encryption_key_change_
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://adunni:adunni_dev_pass@localhost:5432/adunni';
 const TLS_CERT = process.env.TLS_CERT_PATH;
 const TLS_KEY = process.env.TLS_KEY_PATH;
+const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? 'savanna-bank';
 
 const ASR_SERVICE_URL = process.env.ASR_SERVICE_URL ?? 'http://localhost:3001';
 const TTS_SERVICE_URL = process.env.TTS_SERVICE_URL ?? 'http://localhost:3002';
@@ -49,6 +51,23 @@ const ndprService = new NdprComplianceService(pool);
 const app = express();
 app.use(securityHeaders);
 app.use(inputValidationMiddleware);
+
+// ── CORS ──
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && CORS_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client-Id');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+  }
+  next();
+});
+
 app.use(rateLimitMiddleware({ windowMs: 60_000, maxRequests: 200, skipPaths: ['/health', '/info'] }));
 app.use(express.json({ limit: '5mb' }));
 
@@ -58,6 +77,48 @@ const server = createSecureServer(app, PORT, { certPath: TLS_CERT, keyPath: TLS_
 const wss = new WebSocketServer({ server, path: '/v1/sessions/:sessionId/stream' });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: '0.1.0' }));
+
+// ── GET /info — Public endpoint returning demo client config (no auth) ──
+app.get('/info', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT client_id, client_name, allowed_languages, default_language, branding FROM clients WHERE client_id = $1',
+      [DEMO_CLIENT_ID]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Demo client not found' });
+    res.json({
+      clientId: rows[0]['client_id'],
+      clientName: rows[0]['client_name'],
+      allowedLanguages: rows[0]['allowed_languages'],
+      defaultLanguage: rows[0]['default_language'],
+      branding: rows[0]['branding'],
+    });
+  } catch (err) {
+    console.error('[gateway] info error:', err);
+    res.status(500).json({ error: 'Failed to get info' });
+  }
+});
+
+// ── POST /v1/auth/demo — Issue a demo JWT for the public frontend (no API key required) ──
+app.post('/v1/auth/demo', async (req, res) => {
+  try {
+    const { clientId } = req.body;
+    const targetClient = clientId ?? DEMO_CLIENT_ID;
+
+    const { rows } = await pool.query('SELECT client_id FROM clients WHERE client_id = $1', [targetClient]);
+    if (!rows[0]) return res.status(404).json({ error: 'Client not found' });
+
+    const token = issueToken(
+      { clientId: targetClient, role: 'client' },
+      JWT_SECRET,
+      '24h'
+    );
+    res.json({ token, clientId: targetClient, role: 'client', expiresIn: '24h' });
+  } catch (err) {
+    console.error('[gateway] auth/demo error:', err);
+    res.status(500).json({ error: 'Failed to issue demo token' });
+  }
+});
 
 // ── POST /v1/auth/token — Issue a JWT token via API key ──
 app.post('/v1/auth/token', async (req, res) => {

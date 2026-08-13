@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="459fdc7f-2cf6-48a5-a982-80b72ba3b2f1"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<style>/* latin-ext */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("59175c9f-05f9-46fd-86df-fd65e76dd781") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("d15b6d05-67a1-4631-928a-3df8ea95b6bc") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("59175c9f-05f9-46fd-86df-fd65e76dd781") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("d15b6d05-67a1-4631-928a-3df8ea95b6bc") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("59175c9f-05f9-46fd-86df-fd65e76dd781") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("d15b6d05-67a1-4631-928a-3df8ea95b6bc") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("59175c9f-05f9-46fd-86df-fd65e76dd781") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("d15b6d05-67a1-4631-928a-3df8ea95b6bc") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("59175c9f-05f9-46fd-86df-fd65e76dd781") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("d15b6d05-67a1-4631-928a-3df8ea95b6bc") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("36379218-1bbb-495d-90ab-a4f5d387bc27") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("33ec73d1-4b9c-4870-a0c5-83099031b453") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("5c2165ca-2396-40f4-9c78-2791dc63aa39") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("d3f40230-a17a-4cf1-9317-275adea59fc4") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("91b18c74-efab-438a-85dd-d97c85528d73") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("36bc2ba8-317f-4c48-9aaf-c798d1f80abe") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("36379218-1bbb-495d-90ab-a4f5d387bc27") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("33ec73d1-4b9c-4870-a0c5-83099031b453") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("5c2165ca-2396-40f4-9c78-2791dc63aa39") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("d3f40230-a17a-4cf1-9317-275adea59fc4") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("91b18c74-efab-438a-85dd-d97c85528d73") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("36bc2ba8-317f-4c48-9aaf-c798d1f80abe") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("36379218-1bbb-495d-90ab-a4f5d387bc27") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("33ec73d1-4b9c-4870-a0c5-83099031b453") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("5c2165ca-2396-40f4-9c78-2791dc63aa39") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("d3f40230-a17a-4cf1-9317-275adea59fc4") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("91b18c74-efab-438a-85dd-d97c85528d73") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("36bc2ba8-317f-4c48-9aaf-c798d1f80abe") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<script src="6edceff8-7d91-4665-a3a9-0e8a11ad8b55"></script>
+
+<style>
+  body { margin:0; background:#07090B; font-family:'DM Sans', system-ui, sans-serif; -webkit-font-smoothing:antialiased; }
+  a { color:#2FD4C4; text-decoration:none; }
+  a:hover { color:#3FE2D2; }
+  @keyframes wf { 0%,100% { transform:scaleY(0.25); } 50% { transform:scaleY(1); } }
+  @keyframes ringPulse { 0% { box-shadow:0 0 0 0 rgba(47,212,196,0.45); } 100% { box-shadow:0 0 0 26px rgba(47,212,196,0); } }
+  @keyframes micPulse { 0% { box-shadow:0 0 0 0 rgba(228,87,60,0.5); } 100% { box-shadow:0 0 0 18px rgba(228,87,60,0); } }
+</style>
+</helmet>
+
+<div style="display:flex; flex-direction:column; height:100vh; background:#07090B; color:#F4F6F8; font-family:'DM Sans', system-ui, sans-serif; overflow:hidden;">
+
+  <div style="display:flex; align-items:center; gap:14px; padding:14px 22px; border-bottom:1px solid rgba(255,255,255,0.08); flex-shrink:0;">
+    <div style="width:32px; height:32px; border-radius:9px; background:linear-gradient(135deg,#2FD4C4,#189C90); display:flex; align-items:center; justify-content:center;">
+      <svg width="17" height="17" sc-camel-view-box="0 0 24 24" fill="none"><path d="M4 12h3l2-7 4 14 2-7h5" stroke="#08201D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+    </div>
+    <div>
+      <div style="font-weight:700; font-size:15px; letter-spacing:-0.02em; line-height:1.1;">PlotWeaver</div>
+      <div style="font-family:'JetBrains Mono', monospace; font-size:8.5px; letter-spacing:0.12em; color:#8A9499; margin-top:2px;">AI HUMANS THAT SPEAK AFRICA</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; margin-left:18px; background:rgba(228,87,60,0.14); border:1px solid rgba(228,87,60,0.4); border-radius:999px; padding:5px 13px;">
+      <span style="width:7px; height:7px; border-radius:50%; background:#E4573C;"></span>
+      <span style="font-family:'JetBrains Mono', monospace; font-size:10px; letter-spacing:0.1em; font-weight:700; color:#FF8A70;">LIVE DEMO</span>
+    </div>
+    <div style="margin-left:auto; display:flex; align-items:center; gap:18px; font-family:'JetBrains Mono', monospace; font-size:10.5px; color:#8A9499;">
+      <span>SESSION <b style="color:#C7CDD1;">bank-yo-004</b></span>
+      <span>TTFA <b style="color:#2FD4C4;">{{ ttfa }} ms</b></span>
+      <span>LATENCY <b style="color:#2FD4C4;">&lt;1s E2E</b></span>
+    </div>
+  </div>
+
+  <div style="display:flex; flex:1; min-height:0;">
+
+    <div style="flex:1.15; min-width:0; display:flex; flex-direction:column; position:relative; background:radial-gradient(ellipse at 50% 35%, #10181B 0%, #07090B 70%);">
+
+      <div style="flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; align-items:center; justify-content:safe center; gap:18px; padding:26px;">
+        <div style="position:relative; width:min(240px, 30vh); height:min(240px, 30vh); flex-shrink:0;">
+          <sc-if value="{{ aiSpeaking }}">
+            <div style="position:absolute; inset:-8px; border-radius:50%; border:2px solid #2FD4C4; animation:ringPulse 1.4s ease-out infinite;"></div>
+          </sc-if>
+          <div style="position:absolute; inset:0; border-radius:50%; border:2px solid rgba(47,212,196,0.35); padding:6px; box-sizing:border-box;">
+            <image-slot id="adunni-face" shape="circle" style="width:100%; height:100%;" src="{{ portraitSrc }}" placeholder="Drop Àdùnní's photo"></image-slot>
+          </div>
+        </div>
+        <div style="text-align:center;">
+          <div style="display:flex; align-items:center; justify-content:center; gap:10px;">
+            <div style="font-size:30px; font-weight:800; letter-spacing:-0.02em;">Àdùnní</div>
+            <sc-if value="{{ aiSpeaking }}"><span style="font-family:'JetBrains Mono', monospace; font-size:9px; letter-spacing:0.1em; font-weight:700; color:#08201D; background:#2FD4C4; padding:4px 9px; border-radius:999px;">SPEAKING</span></sc-if>
+          </div>
+          <div style="font-size:14px; color:#96A0A5; margin-top:3px;">AI Banking Agent · Savanna Bank demo</div>
+          <div style="display:flex; gap:7px; justify-content:center; margin-top:12px; flex-wrap:wrap;">
+            <sc-for list="{{ langChips }}" as="c" hint-placeholder-count="5">
+              <span style="font-family:'JetBrains Mono', monospace; font-size:10px; letter-spacing:0.06em; font-weight:700; padding:5px 11px; border-radius:999px; border:1px solid {{ c.border }}; color:{{ c.color }}; background:{{ c.bg }};">{{ c.name }}</span>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display:flex; align-items:flex-end; gap:4px; height:34px;">
+          <sc-if value="{{ aiSpeaking }}">
+            <div style="width:5px; height:100%; border-radius:3px; background:#2FD4C4; animation:wf 0.7s ease-in-out infinite;"></div>
+            <div style="width:5px; height:100%; border-radius:3px; background:#2FD4C4; animation:wf 0.7s ease-in-out 0.12s infinite;"></div>
+            <div style="width:5px; height:100%; border-radius:3px; background:#2FD4C4; animation:wf 0.7s ease-in-out 0.24s infinite;"></div>
+            <div style="width:5px; height:100%; border-radius:3px; background:#2FD4C4; animation:wf 0.7s ease-in-out 0.36s infinite;"></div>
+            <div style="width:5px; height:100%; border-radius:3px; background:#2FD4C4; animation:wf 0.7s ease-in-out 0.48s infinite;"></div>
+            <div style="width:5px; height:100%; border-radius:3px; background:#2FD4C4; animation:wf 0.7s ease-in-out 0.2s infinite;"></div>
+            <div style="width:5px; height:100%; border-radius:3px; background:#2FD4C4; animation:wf 0.7s ease-in-out 0.32s infinite;"></div>
+          </sc-if>
+          <sc-if value="{{ aiIdle }}" hint-placeholder-val="{{ true }}">
+            <div style="width:5px; height:8px; border-radius:3px; background:#26333A;"></div>
+            <div style="width:5px; height:8px; border-radius:3px; background:#26333A;"></div>
+            <div style="width:5px; height:8px; border-radius:3px; background:#26333A;"></div>
+            <div style="width:5px; height:8px; border-radius:3px; background:#26333A;"></div>
+            <div style="width:5px; height:8px; border-radius:3px; background:#26333A;"></div>
+            <div style="width:5px; height:8px; border-radius:3px; background:#26333A;"></div>
+            <div style="width:5px; height:8px; border-radius:3px; background:#26333A;"></div>
+          </sc-if>
+        </div>
+      </div>
+
+      <sc-if value="{{ showCaption }}">
+        <div style="margin:0 214px 14px 26px; background:rgba(11,16,19,0.85); border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:16px 20px; backdrop-filter:blur(6px);">
+          <div style="display:flex; align-items:center; gap:9px; margin-bottom:7px;">
+            <span style="font-family:'JetBrains Mono', monospace; font-size:9.5px; letter-spacing:0.12em; font-weight:700; color:{{ captionColor }};">{{ captionLabel }}</span>
+            <span style="font-family:'JetBrains Mono', monospace; font-size:9.5px; color:#6E787D;">{{ captionLangs }}</span>
+          </div>
+          <div style="font-size:19px; line-height:1.45; font-weight:500; min-height:28px; text-wrap:pretty;">{{ caption }}<span style="color:#2FD4C4;">▎</span></div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isIdle }}" hint-placeholder-val="{{ true }}">
+        <div style="position:absolute; inset:0; background:rgba(7,9,11,0.88); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px);">
+          <div style="text-align:center; max-width:420px; padding:20px;">
+            <div style="font-size:24px; font-weight:800; letter-spacing:-0.02em; margin-bottom:8px;">Meet Àdùnní</div>
+            <p style="color:#96A0A5; font-size:15px; line-height:1.55; margin:0 0 22px; text-wrap:pretty;">An AI human powered by STORM-OS voices. She speaks Nigerian English, Pidgin, Yorùbá, Igbo and Hausa, and code-switches mid-conversation.</p>
+            <button sc-camel-on-click="{{ startDemo }}" style="border:none; background:#2FD4C4; color:#08201D; font-family:'JetBrains Mono', monospace; font-size:13px; letter-spacing:0.06em; font-weight:700; padding:15px 30px; border-radius:11px; cursor:pointer;" style-hover="background:#3FE2D2">▶ START DEMO CALL</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ notIdle }}">
+      <div style="position:absolute; right:22px; bottom:104px; width:172px; z-index:5;">
+        <div style="position:relative; height:124px; border-radius:14px; overflow:hidden; border:2px solid {{ userTileBorder }}; background:#10181B; box-shadow:0 12px 30px -12px rgba(0,0,0,0.7);">
+          <image-slot id="wole-face" shape="rect" placeholder="Drop your photo" src="75bd685c-12ce-40c5-997d-98a1b81af730"></image-slot>
+          <div style="position:absolute; left:0; right:0; bottom:0; padding:18px 10px 7px; background:linear-gradient(transparent, rgba(7,9,11,0.85)); display:flex; align-items:center; gap:6px; pointer-events:none;">
+            <span style="font-family:'JetBrains Mono', monospace; font-size:9px; letter-spacing:0.1em; font-weight:700; color:{{ userTileColor }};">{{ userTileLabel }}</span>
+            <sc-if value="{{ userSpeaking }}">
+              <span style="display:flex; align-items:flex-end; gap:2px; height:10px; margin-left:auto;">
+                <span style="width:3px; height:100%; border-radius:2px; background:#FF8A70; animation:wf 0.7s ease-in-out infinite;"></span>
+                <span style="width:3px; height:100%; border-radius:2px; background:#FF8A70; animation:wf 0.7s ease-in-out 0.15s infinite;"></span>
+                <span style="width:3px; height:100%; border-radius:2px; background:#FF8A70; animation:wf 0.7s ease-in-out 0.3s infinite;"></span>
+              </span>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+      <div style="display:flex; align-items:center; justify-content:center; gap:14px; padding:16px 26px 22px; flex-shrink:0;">
+        <sc-if value="{{ userSpeaking }}">
+          <div style="width:52px; height:52px; border-radius:50%; background:#E4573C; display:flex; align-items:center; justify-content:center; animation:micPulse 1.2s ease-out infinite;">
+            <svg width="20" height="20" sc-camel-view-box="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0014 0M12 18v3"></path></svg>
+          </div>
+        </sc-if>
+        <sc-if value="{{ userIdle }}" hint-placeholder-val="{{ true }}">
+          <div style="width:52px; height:52px; border-radius:50%; background:#141A1E; border:1px solid rgba(255,255,255,0.13); display:flex; align-items:center; justify-content:center;">
+            <svg width="20" height="20" sc-camel-view-box="0 0 24 24" fill="none" stroke="#C7CDD1" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0014 0M12 18v3"></path></svg>
+          </div>
+        </sc-if>
+        <sc-if value="{{ isDone }}">
+          <button sc-camel-on-click="{{ startDemo }}" style="border:1px solid #2FD4C4; background:transparent; color:#2FD4C4; font-family:'JetBrains Mono', monospace; font-size:11.5px; letter-spacing:0.06em; font-weight:700; padding:14px 22px; border-radius:11px; cursor:pointer;" style-hover="background:rgba(47,212,196,0.1)">↺ REPLAY DEMO</button>
+        </sc-if>
+        <div style="width:52px; height:52px; border-radius:50%; background:#E4573C22; border:1px solid rgba(228,87,60,0.4); display:flex; align-items:center; justify-content:center; cursor:pointer;" style-hover="background:rgba(228,87,60,0.25)">
+          <svg width="20" height="20" sc-camel-view-box="0 0 24 24" fill="none" stroke="#FF8A70" stroke-width="2"><path d="M4 12c5-5 11-5 16 0l-2.5 2.5c-1-1-2-1.6-3.5-2v3l-4 0v-3c-1.5 0.4-2.5 1-3.5 2z"></path></svg>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:430px; flex-shrink:0; border-left:1px solid rgba(255,255,255,0.08); display:flex; flex-direction:column; background:#0B1013;">
+      <div style="display:flex; align-items:center; gap:10px; padding:15px 18px; border-bottom:1px solid rgba(255,255,255,0.08); flex-shrink:0;">
+        <span style="font-size:14px; font-weight:700;">Live transcript</span>
+        <span style="font-family:'JetBrains Mono', monospace; font-size:9px; letter-spacing:0.1em; font-weight:700; color:#2FD4C4; background:rgba(47,212,196,0.12); border:1px solid rgba(47,212,196,0.3); padding:4px 9px; border-radius:999px;">AUTO LANGUAGE DETECT</span>
+      </div>
+      <div ref="{{ transcriptRef }}" style="flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:16px;">
+        <sc-for list="{{ turns }}" as="t" hint-placeholder-count="2">
+          <div style="display:flex; flex-direction:column; align-items:{{ t.align }};">
+            <div style="display:flex; gap:6px; margin-bottom:5px; align-items:center;">
+              <span style="font-family:'JetBrains Mono', monospace; font-size:9px; letter-spacing:0.08em; font-weight:700; color:{{ t.nameColor }};">{{ t.name }}</span>
+              <span style="font-family:'JetBrains Mono', monospace; font-size:9px; color:#6E787D;">{{ t.langLabel }}</span>
+            </div>
+            <div style="max-width:88%; background:{{ t.bg }}; border:1px solid {{ t.border }}; border-radius:{{ t.radius }}; padding:11px 14px; font-size:14px; line-height:1.5;">{{ t.text }}</div>
+            <sc-if value="{{ t.showTrans }}">
+              <div style="max-width:88%; font-size:12px; color:#7C878C; font-style:italic; margin-top:5px; line-height:1.45;">{{ t.trans }}</div>
+            </sc-if>
+          </div>
+        </sc-for>
+        <sc-if value="{{ isIdle }}">
+          <div style="color:#5B6469; font-size:13px; text-align:center; margin-top:32px;">Transcript appears here once the call starts.</div>
+        </sc-if>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.08); padding:13px 18px; flex-shrink:0; display:flex; flex-wrap:wrap; gap:6px 16px; font-family:'JetBrains Mono', monospace; font-size:9.5px; color:#6E787D;">
+        <span>ASR <b style="color:#C7CDD1;">STORM-OS</b></span>
+        <span>TTS <b style="color:#C7CDD1;">Àdùnní-YO-04</b></span>
+        <span>FACE <b style="color:#C7CDD1;">REAL-TIME RENDER</b></span>
+        <span>TURNS <b style="color:#C7CDD1;">ADAPTIVE</b></span>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 880}, &quot;showTranslations&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Demo&quot;}, &quot;demoSpeed&quot;: {&quot;editor&quot;: &quot;range&quot;, &quot;default&quot;: 0.75, &quot;min&quot;: 0.5, &quot;max&quot;: 2.5, &quot;step&quot;: 0.25, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Demo&quot;}}">
+class Component extends DCLogic {
+  state = { demoStartAt: 0 };
+  transcriptRef = React.createRef();
+  // Pure wall-clock schedule: any tick derives the correct frame from demoStartAt alone,
+  // so remounts/throttling can never strand playback.
+  frame(script) {
+    const t0 = this.state.demoStartAt;
+    if (!t0) return { phase: 'idle', idx: 0, chars: 0, ttfa: 240 };
+    const sp = this.props.demoSpeed ?? 1;
+    const CPS = 55 * sp, PAUSE = 1300 / sp;
+    let rem = Date.now() - t0;
+    for (let i = 0; i < script.length; i++) {
+      const len = script[i].text.length, typeMs = len / CPS * 1000;
+      const ttfa = 200 + (i * 37) % 90;
+      if (rem < typeMs) return { phase: 'playing', idx: i, chars: Math.max(0, Math.floor(rem / 1000 * CPS)), ttfa };
+      rem -= typeMs;
+      if (i === script.length - 1) break;
+      if (rem < PAUSE) return { phase: 'playing', idx: i, chars: len, ttfa };
+      rem -= PAUSE;
+    }
+    const last = script[script.length - 1];
+    return { phase: 'done', idx: script.length - 1, chars: last.text.length, ttfa: 240 };
+  }
+  ensureDriver() {
+    if (this.driverAlive) return;
+    this.driverAlive = true;
+    const check = () => {
+      if (!this.state.demoStartAt || this.lastFrameKey === 'done') return;
+      const f = this.frame(this.script());
+      const key = f.phase === 'done' ? 'done' : f.phase + ':' + f.idx + ':' + f.chars;
+      if (key !== this.lastFrameKey) {
+        this.lastFrameKey = key;
+        this.forceUpdate();
+        const el = this.transcriptRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }
+    };
+    const loop = () => { check(); this.raf = requestAnimationFrame(loop); };
+    this.raf = requestAnimationFrame(loop);
+    this.timer = setInterval(check, 250);
+  }
+  script() {
+    return [
+      { who: 'ai', langs: ['Yorùbá', 'English (NG)'], text: "Ẹ káàbọ̀! Good afternoon. I'm Àdùnní, your Savanna Bank assistant. A lè sọ̀rọ̀ ní èdè Yorùbá, Igbo, Hausa, Pidgin, anything you like. How can I help today?", trans: "Welcome! We can speak in Yorùbá, Igbo, Hausa or Pidgin, whatever you prefer." },
+      { who: 'user', langs: ['Pidgin'], text: "Abeg Àdùnní, I wan send ₦50,000 give my mama for Ibadan, but the app dey show me one error since morning.", trans: "Please, I want to send ₦50,000 to my mother in Ibadan, but the app has been showing an error since this morning." },
+      { who: 'ai', langs: ['Pidgin', 'English (NG)'], text: "No wahala, Wole. I don see the transfer for your account. E pause because na ₦20,000 remain for your daily limit. Make I raise the limit for you one-time?", trans: "No problem. I can see the transfer. It paused because only ₦20,000 remains of your daily limit. Shall I raise it for this transaction?" },
+      { who: 'user', langs: ['Yorùbá'], text: "Ṣé owó náà ti kúrò nínú àkáǹtì mi?", trans: "Has the money already left my account?" },
+      { who: 'ai', langs: ['Yorùbá'], text: "Rárá o. Owó yín kò tíì kúrò, ó ṣì wà nínú àkáǹtì yín pátápátá. Tí ẹ bá fọwọ́ sí i, màá fi ránṣẹ́ lẹ́sẹ̀kẹsẹ̀.", trans: "Not at all. Your money hasn't left, it is still fully in your account. Once you approve, I'll send it immediately." },
+      { who: 'user', langs: ['Hausa'], text: "Madalla! Za ka iya ci gaba da Hausa? Mahaifiyata Hausa kawai take ji.", trans: "Great! Can you continue in Hausa? My mother only understands Hausa." },
+      { who: 'ai', langs: ['Hausa'], text: "Ī, mana! Zan aika mata saƙon tabbatarwa da Hausa: 'An karɓi ₦50,000 daga Wole.' Komai a shirye yake, sai ka amince.", trans: "Yes, of course! I'll send her the confirmation in Hausa: '₦50,000 received from Wole.' Everything is ready, just approve." },
+      { who: 'user', langs: ['Igbo'], text: "Daalụ nke ukwuu! Ị na-asụkwa Igbo?", trans: "Thank you so much! Do you also speak Igbo?" },
+      { who: 'ai', langs: ['Igbo', 'English (NG)'], text: "Ee, a na m asụ Igbo nke ọma! Transfer done. Ego ahụ eruola. Anything else I can help with today, Wole?", trans: "Yes, I speak Igbo well! The transfer is done. The money has arrived." }
+    ];
+  }
+  componentDidMount() { this.ensureDriver(); }
+  startDemo = () => {
+    this.lastFrameKey = '';
+    this.setState({ demoStartAt: Date.now() });
+  };
+  componentWillUnmount() {
+    clearInterval(this.timer);
+    cancelAnimationFrame(this.raf);
+    this.driverAlive = false;
+  }
+  renderVals() {
+    this.ensureDriver();
+    const script = this.script();
+    const f = this.frame(script);
+    const showTrans = this.props.showTranslations ?? true;
+    const playing = f.phase === 'playing';
+    const active = playing ? script[f.idx] : null;
+    const typed = active ? active.text.slice(0, f.chars) : '';
+    const aiSpeaking = !!active && active.who === 'ai' && f.chars < active.text.length;
+    const userSpeaking = !!active && active.who === 'user' && f.chars < active.text.length;
+    const count = f.phase === 'idle' ? 0 : (playing ? f.idx + 1 : script.length);
+    const turns = script.slice(0, count).map((t, i) => {
+      const isActive = playing && i === f.idx;
+      const ai = t.who === 'ai';
+      return {
+        name: ai ? 'ÀDÙNNÍ' : 'WOLE', langLabel: t.langs.join(' + '),
+        text: isActive ? typed : t.text,
+        trans: t.trans, showTrans: showTrans && !!t.trans && (!isActive || f.chars >= t.text.length),
+        align: ai ? 'flex-start' : 'flex-end',
+        nameColor: ai ? '#2FD4C4' : '#FFB098',
+        bg: ai ? 'rgba(47,212,196,0.08)' : 'rgba(255,255,255,0.05)',
+        border: ai ? 'rgba(47,212,196,0.25)' : 'rgba(255,255,255,0.12)',
+        radius: ai ? '3px 13px 13px 13px' : '13px 3px 13px 13px'
+      };
+    });
+    const allLangs = ['English (NG)', 'Pidgin', 'Yorùbá', 'Igbo', 'Hausa'];
+    const activeLangs = active ? active.langs : [];
+    const langChips = allLangs.map(name => {
+      const on = activeLangs.includes(name);
+      return { name, on, border: on ? '#2FD4C4' : 'rgba(255,255,255,0.14)', color: on ? '#08201D' : '#8A9499', bg: on ? '#2FD4C4' : 'transparent' };
+    });
+    return {
+      isIdle: f.phase === 'idle', isDone: f.phase === 'done', notIdle: f.phase !== 'idle',
+      aiSpeaking, aiIdle: !aiSpeaking, userSpeaking, userIdle: !userSpeaking,
+      showCaption: playing, caption: typed,
+      captionLabel: active ? (active.who === 'ai' ? 'ÀDÙNNÍ · SPEAKING' : 'WOLE · TRANSCRIBING') : '',
+      captionColor: active && active.who === 'user' ? '#FFB098' : '#2FD4C4',
+      captionLangs: active ? active.langs.join(' + ') : '',
+      turns, langChips, ttfa: f.ttfa,
+      userTileBorder: userSpeaking ? '#E4573C' : 'rgba(255,255,255,0.15)',
+      userTileColor: userSpeaking ? '#FF8A70' : '#C7CDD1',
+      userTileLabel: userSpeaking ? 'WOLE · SPEAKING' : 'WOLE',
+      startDemo: this.startDemo, transcriptRef: this.transcriptRef,
+      portraitSrc: (window.__resources && window.__resources.adunniPortrait) || 'assets/adunni-portrait.png'
+    };
+  }
+}
+</script>
+
+
+</body></html>

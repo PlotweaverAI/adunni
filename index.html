@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Àdùnní — AI Human Demo | PlotWeaver</title>
+<title>Àdùnní — AI Voice Agent | Live Demo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
@@ -15,6 +15,7 @@
   @keyframes ringPulse { 0% { box-shadow: 0 0 0 0 rgba(47,212,196,0.45); } 100% { box-shadow: 0 0 0 26px rgba(47,212,196,0); } }
   @keyframes micPulse { 0% { box-shadow: 0 0 0 0 rgba(228,87,60,0.5); } 100% { box-shadow: 0 0 0 18px rgba(228,87,60,0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
   .app { display: flex; flex-direction: column; height: 100vh; background: #07090B; color: #F4F6F8; overflow: hidden; }
 
@@ -29,6 +30,11 @@
   .telemetry { margin-left: auto; display: flex; align-items: center; gap: 18px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #8A9499; }
   .telemetry b { color: #C7CDD1; font-weight: 600; }
   .telemetry .teal b { color: #2FD4C4; }
+  .conn-status { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 4px 10px; border-radius: 999px; }
+  .conn-status.connected { color: #3FB950; background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.25); }
+  .conn-status.disconnected { color: #8A9499; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); }
+  .conn-status.connecting { color: #F0B429; background: rgba(240,180,41,0.1); border: 1px solid rgba(240,180,41,0.25); }
+  .conn-status.error { color: #F85149; background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.25); }
 
   /* ── Main layout ── */
   .main { display: flex; flex: 1; min-height: 0; }
@@ -66,17 +72,18 @@
 
   /* ── Idle overlay ── */
   .idle-overlay { position: absolute; inset: 0; background: rgba(7,9,11,0.88); display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px); z-index: 10; }
-  .idle-content { text-align: center; max-width: 420px; padding: 20px; }
+  .idle-content { text-align: center; max-width: 460px; padding: 20px; }
   .idle-title { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 8px; }
   .idle-desc { color: #96A0A5; font-size: 15px; line-height: 1.55; margin: 0 0 22px; }
   .start-btn { border: none; background: #2FD4C4; color: #08201D; font-family: 'JetBrains Mono', monospace; font-size: 13px; letter-spacing: 0.06em; font-weight: 700; padding: 15px 30px; border-radius: 11px; cursor: pointer; transition: background 0.2s; }
   .start-btn:hover { background: #3FE2D2; }
+  .start-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .idle-error { color: #F85149; font-size: 13px; margin-top: 14px; display: none; }
 
-  /* ── User video tile ── */
+  /* ── User tile ── */
   .user-tile { position: absolute; right: 22px; bottom: 104px; width: 172px; z-index: 5; }
   .user-tile-inner { position: relative; height: 124px; border-radius: 14px; overflow: hidden; border: 2px solid rgba(255,255,255,0.15); background: #10181B; box-shadow: 0 12px 30px -12px rgba(0,0,0,0.7); transition: border-color 0.3s; }
   .user-tile-inner.speaking { border-color: #E4573C; }
-  .user-tile-img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .user-tile-overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 7px; background: linear-gradient(transparent, rgba(7,9,11,0.85)); display: flex; align-items: center; gap: 6px; pointer-events: none; }
   .user-tile-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.1em; font-weight: 700; color: #C7CDD1; }
   .user-tile-label.speaking { color: #FF8A70; }
@@ -85,12 +92,18 @@
 
   /* ── Bottom controls ── */
   .controls { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 16px 26px 22px; flex-shrink: 0; }
-  .mic-btn-active { width: 52px; height: 52px; border-radius: 50%; background: #E4573C; display: flex; align-items: center; justify-content: center; animation: micPulse 1.2s ease-out infinite; }
-  .mic-btn-idle { width: 52px; height: 52px; border-radius: 50%; background: #141A1E; border: 1px solid rgba(255,255,255,0.13); display: flex; align-items: center; justify-content: center; }
-  .replay-btn { border: 1px solid #2FD4C4; background: transparent; color: #2FD4C4; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; letter-spacing: 0.06em; font-weight: 700; padding: 14px 22px; border-radius: 11px; cursor: pointer; transition: background 0.2s; }
-  .replay-btn:hover { background: rgba(47,212,196,0.1); }
   .end-call-btn { width: 52px; height: 52px; border-radius: 50%; background: rgba(228,87,60,0.13); border: 1px solid rgba(228,87,60,0.4); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.2s; }
   .end-call-btn:hover { background: rgba(228,87,60,0.25); }
+
+  /* ── Text input ── */
+  .input-bar { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 600px; }
+  .input-bar input { flex: 1; background: #0B1013; border: 1px solid rgba(255,255,255,0.13); border-radius: 12px; padding: 14px 18px; color: #F4F6F8; font-family: 'DM Sans', sans-serif; font-size: 15px; outline: none; transition: border-color 0.2s; }
+  .input-bar input:focus { border-color: #2FD4C4; }
+  .input-bar input::placeholder { color: #5B6469; }
+  .input-bar input:disabled { opacity: 0.4; }
+  .send-btn { background: #2FD4C4; color: #08201D; border: none; border-radius: 12px; padding: 14px 22px; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.06em; font-weight: 700; cursor: pointer; transition: background 0.2s; white-space: nowrap; }
+  .send-btn:hover { background: #3FE2D2; }
+  .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* ── Right panel (transcript) ── */
   .transcript-panel { width: 430px; flex-shrink: 0; border-left: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; background: #0B1013; }
@@ -98,7 +111,7 @@
   .transcript-title { font-size: 14px; font-weight: 700; }
   .auto-lang-badge { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.1em; font-weight: 700; color: #2FD4C4; background: rgba(47,212,196,0.12); border: 1px solid rgba(47,212,196,0.3); padding: 4px 9px; border-radius: 999px; }
   .transcript-list { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
-  .turn { display: flex; flex-direction: column; }
+  .turn { display: flex; flex-direction: column; animation: fadeIn 0.3s ease; }
   .turn.ai { align-items: flex-start; }
   .turn.user { align-items: flex-end; }
   .turn-meta { display: flex; gap: 6px; margin-bottom: 5px; align-items: center; }
@@ -112,11 +125,6 @@
   .transcript-footer { border-top: 1px solid rgba(255,255,255,0.08); padding: 13px 18px; flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E787D; }
   .transcript-footer b { color: #C7CDD1; font-weight: 600; }
 
-  /* ── Speed control ── */
-  .speed-control { display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A9499; }
-  .speed-control input[type="range"] { width: 80px; accent-color: #2FD4C4; cursor: pointer; }
-  .speed-val { color: #2FD4C4; font-weight: 700; min-width: 32px; }
-
   /* ── Scrollbar ── */
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -126,6 +134,27 @@
   /* ── Avatar SVG placeholder ── */
   .avatar-placeholder { width: 100%; height: 100%; border-radius: 50%; background: #0E1417; display: flex; align-items: center; justify-content: center; }
   .avatar-placeholder svg { width: 60%; height: 60%; opacity: 0.5; }
+
+  /* ── Thinking indicator ── */
+  .thinking { display: flex; align-items: center; gap: 4px; padding: 11px 14px; background: rgba(47,212,196,0.08); border: 1px solid rgba(47,212,196,0.25); border-radius: 3px 13px 13px 13px; }
+  .thinking-dot { width: 6px; height: 6px; border-radius: 50%; background: #2FD4C4; animation: wf 1s ease-in-out infinite; }
+  .thinking-dot:nth-child(2) { animation-delay: 0.15s; }
+  .thinking-dot:nth-child(3) { animation-delay: 0.3s; }
+
+  /* ── Responsive ── */
+  @media (max-width: 900px) {
+    .transcript-panel { width: 320px; }
+    .caption-bar { margin-right: 26px; }
+    .user-tile { width: 130px; bottom: 120px; }
+    .user-tile-inner { height: 94px; }
+  }
+  @media (max-width: 700px) {
+    .main { flex-direction: column; }
+    .transcript-panel { width: 100%; height: 200px; border-left: none; border-top: 1px solid rgba(255,255,255,0.08); }
+    .user-tile { display: none; }
+    .caption-bar { margin: 0 16px 14px; }
+    .telemetry { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -137,23 +166,19 @@
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 12h3l2-7 4 14 2-7h5" stroke="#08201D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div>
-      <div class="brand-name">PlotWeaver</div>
+      <div class="brand-name" id="brand-name">Àdùnní</div>
       <div class="brand-tag">AI HUMANS THAT SPEAK AFRICA</div>
     </div>
     <div class="live-pill">
       <span class="live-dot"></span>
-      <span class="live-text">LIVE DEMO</span>
+      <span class="live-text">LIVE</span>
     </div>
     <div class="telemetry">
-      <span>SESSION <b>bank-yo-004</b></span>
-      <span class="teal">TTFA <b id="ttfa-val">240 ms</b></span>
-      <span class="teal">LATENCY <b>&lt;1s E2E</b></span>
-      <div class="speed-control">
-        <span>SPEED</span>
-        <input type="range" id="speed-slider" min="0.5" max="2.5" step="0.25" value="0.75">
-        <span class="speed-val" id="speed-val">0.75×</span>
-      </div>
+      <span>SESSION <b id="session-id">—</b></span>
+      <span class="teal">LATENCY <b id="latency-val">— ms</b></span>
+      <span class="teal">TURNS <b id="turn-count">0</b></span>
     </div>
+    <span class="conn-status disconnected" id="conn-status">OFFLINE</span>
   </div>
 
   <!-- ── Main layout ── -->
@@ -163,7 +188,7 @@
     <div class="stage" id="stage">
       <div class="stage-center">
         <div class="avatar-wrap" id="avatar-wrap">
-          <div class="avatar-ring-static">
+          <div class="avatar-ring-static" id="avatar-ring">
             <div class="avatar-placeholder" id="avatar-placeholder">
               <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="60" cy="45" r="22" fill="none" stroke="#2FD4C4" stroke-width="3" opacity="0.4"/>
@@ -174,10 +199,10 @@
         </div>
         <div style="text-align:center;">
           <div class="name-row">
-            <div class="name">Àdùnní</div>
+            <div class="name" id="agent-name">Àdùnní</div>
             <span class="speaking-badge" id="speaking-badge" style="display:none;">SPEAKING</span>
           </div>
-          <div class="subtitle">AI Banking Agent · Savanna Bank demo</div>
+          <div class="subtitle" id="agent-subtitle">AI Voice Agent · Connecting to backend…</div>
           <div class="lang-chips" id="lang-chips"></div>
         </div>
         <div class="waveform" id="waveform"></div>
@@ -196,12 +221,13 @@
       <div class="idle-overlay" id="idle-overlay">
         <div class="idle-content">
           <div class="idle-title">Meet Àdùnní</div>
-          <p class="idle-desc">An AI human powered by PlotWeaver voices. She speaks Nigerian English, Pidgin, Yorùbá, Igbo and Hausa, and code-switches mid-conversation.</p>
-          <button class="start-btn" id="start-btn">▶ START DEMO CALL</button>
+          <p class="idle-desc" id="idle-desc">An AI voice agent that speaks Nigerian English, Pidgin, Yorùbá, Igbo and Hausa, and code-switches mid-conversation. Start a live call to chat with her.</p>
+          <button class="start-btn" id="start-btn">▶ START LIVE CALL</button>
+          <div class="idle-error" id="idle-error"></div>
         </div>
       </div>
 
-      <!-- User video tile -->
+      <!-- User tile -->
       <div class="user-tile" id="user-tile" style="display:none;">
         <div class="user-tile-inner" id="user-tile-inner">
           <div class="avatar-placeholder" style="border-radius:0;">
@@ -211,7 +237,7 @@
             </svg>
           </div>
           <div class="user-tile-overlay">
-            <span class="user-tile-label" id="user-tile-label">WOLE</span>
+            <span class="user-tile-label" id="user-tile-label">YOU</span>
             <div class="user-tile-wf" id="user-tile-wf" style="display:none;">
               <span style="animation-delay:0s;"></span>
               <span style="animation-delay:0.15s;"></span>
@@ -223,14 +249,11 @@
 
       <!-- Bottom controls -->
       <div class="controls" id="controls">
-        <div class="mic-btn-idle" id="mic-btn-idle">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C7CDD1" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg>
+        <div class="input-bar">
+          <input type="text" id="msg-input" placeholder="Type your message in any language…" disabled autocomplete="off" />
+          <button class="send-btn" id="send-btn" disabled>SEND</button>
         </div>
-        <div class="mic-btn-active" id="mic-btn-active" style="display:none;">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg>
-        </div>
-        <button class="replay-btn" id="replay-btn" style="display:none;">↻ REPLAY DEMO</button>
-        <div class="end-call-btn">
+        <div class="end-call-btn" id="end-call-btn" style="display:none;" title="End call">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF8A70" stroke-width="2"><path d="M4 12c5-5 11-5 16 0l-2.5 2.5c-1-1-2-1.6-3.5-2v3l-4 0v-3c-1.5 0.4-2.5 1-3.5 2z"/></svg>
         </div>
       </div>
@@ -246,10 +269,10 @@
         <div class="transcript-empty" id="transcript-empty">Transcript appears here once the call starts.</div>
       </div>
       <div class="transcript-footer">
-        <span>ASR <b>STORM-OS</b></span>
-        <span>TTS <b>Àdùnní-YO-04</b></span>
-        <span>FACE <b>REAL-TIME RENDER</b></span>
-        <span>TURNS <b>ADAPTIVE</b></span>
+        <span>ASR <b>AUTO-DETECT</b></span>
+        <span>TTS <b>ÀDÙNNÍ-YO-04</b></span>
+        <span>ORCH <b>ADAPTIVE</b></span>
+        <span>SECURITY <b>JWT + AES-256</b></span>
       </div>
     </div>
 
@@ -260,128 +283,78 @@
 (function() {
   'use strict';
 
-  // ── Conversation script (9 turns) ──
-  var SCRIPT = [
-    {
-      who: 'ai',
-      langs: ['Yorùbá', 'English (NG)'],
-      text: "Ẹ káàbọ̀! Good afternoon. I'm Àdùnní, your Savanna Bank assistant. A lè sọ̀rọ̀ ní èdè Yorùbá, Igbo, Hausa, Pidgin, anything you like. How can I help today?",
-      trans: "Welcome! We can speak in Yorùbá, Igbo, Hausa or Pidgin, whatever you prefer."
-    },
-    {
-      who: 'user',
-      langs: ['Pidgin'],
-      text: "Abeg Àdùnní, I wan send ₦50,000 give my mama for Ibadan, but the app dey show me one error since morning.",
-      trans: "Please, I want to send ₦50,000 to my mother in Ibadan, but the app has been showing an error since this morning."
-    },
-    {
-      who: 'ai',
-      langs: ['Pidgin', 'English (NG)'],
-      text: "No wahala, Wole. I don see the transfer for your account. E pause because na ₦20,000 remain for your daily limit. Make I raise the limit for you one-time?",
-      trans: "No problem. I can see the transfer. It paused because only ₦20,000 remains of your daily limit. Shall I raise it for this transaction?"
-    },
-    {
-      who: 'user',
-      langs: ['Yorùbá'],
-      text: "Ṣé owó náà ti kúrò nínú àkántì mi?",
-      trans: "Has the money already left my account?"
-    },
-    {
-      who: 'ai',
-      langs: ['Yorùbá'],
-      text: "Rárã o. Owó yín kò tíì kúrò, ó ṣì wà nínú àkántì yín pátápátá. Tí ẹ bá fọwọ́ sí i, màá fi ránṣẹ́ léṣẹ̀kẹṣẹ̀.",
-      trans: "Not at all. Your money hasn't left, it is still fully in your account. Once you approve, I'll send it immediately."
-    },
-    {
-      who: 'user',
-      langs: ['Hausa'],
-      text: "Madalla! Za ka iya ci gaba da Hausa? Mahaifiyata Hausa kawai take ji.",
-      trans: "Great! Can you continue in Hausa? My mother only understands Hausa."
-    },
-    {
-      who: 'ai',
-      langs: ['Hausa'],
-      text: "Ī, mana! Zan aika mata saƙon tabbatarwa da Hausa: 'An karɓi ₦50,000 daga Wole.' Komai a shirye yake, sai ka amince.",
-      trans: "Yes, of course! I'll send her the confirmation in Hausa: '₦50,000 received from Wole.' Everything is ready, just approve."
-    },
-    {
-      who: 'user',
-      langs: ['Igbo'],
-      text: "Daalụ nke ukwuu! Ị na-asụkwa Igbo?",
-      trans: "Thank you so much! Do you also speak Igbo?"
-    },
-    {
-      who: 'ai',
-      langs: ['Igbo', 'English (NG)'],
-      text: "Ee, a na m asụ Igbo nke ọma! Transfer done. Ego ahụ eruola. Anything else I can help with today, Wole?",
-      trans: "Yes, I speak Igbo well! The transfer is done. The money has arrived."
-    }
-  ];
+  // ── Backend configuration ──
+  // The API is served via nginx HTTPS reverse proxy on the VPS
+  var API_BASE = 'https://67-211-210-8.sslip.io';
+  var WS_BASE = 'wss://67-211-210-8.sslip.io';
 
-  var ALL_LANGS = ['English (NG)', 'Pidgin', 'Yorùbá', 'Igbo', 'Hausa'];
+  // Language display names
+  var LANG_NAMES = {
+    'en-NG': 'English (NG)',
+    'pcm': 'Pidgin',
+    'yo': 'Yorùbá',
+    'ig': 'Igbo',
+    'ha': 'Hausa'
+  };
+  var ALL_LANGS = ['en-NG', 'pcm', 'yo', 'ig', 'ha'];
 
   // ── State ──
-  var demoStartAt = 0;
-  var demoSpeed = 0.75;
-  var rafId = null;
-  var intervalId = null;
-  var driverAlive = false;
-  var lastFrameKey = '';
+  var ws = null;
+  var jwtToken = null;
+  var sessionId = null;
+  var streamToken = null;
+  var clientConfig = null;
+  var turnCount = 0;
+  var aiSpeaking = false;
+  var userSpeaking = false;
+  var connected = false;
+  var lastLatency = 0;
 
   // ── DOM refs ──
   var el = {};
   function cacheDOM() {
-    var ids = ['app','stage','avatar-wrap','speaking-badge','lang-chips','waveform',
+    var ids = ['app','stage','avatar-wrap','avatar-ring','speaking-badge','lang-chips','waveform',
       'caption-bar','caption-label','caption-langs','caption-text',
-      'idle-overlay','start-btn','user-tile','user-tile-inner','user-tile-label',
-      'user-tile-wf','mic-btn-idle','mic-btn-active','replay-btn','controls',
-      'transcript-list','transcript-empty','ttfa-val','speed-slider','speed-val',
-      'avatar-placeholder'];
+      'idle-overlay','start-btn','idle-error','idle-desc',
+      'user-tile','user-tile-inner','user-tile-label','user-tile-wf',
+      'msg-input','send-btn','end-call-btn','controls',
+      'transcript-list','transcript-empty',
+      'conn-status','session-id','latency-val','turn-count',
+      'agent-name','agent-subtitle','brand-name','avatar-placeholder'];
     for (var i = 0; i < ids.length; i++) {
       var parts = ids[i].split('-');
       var key = parts.map(function(p, idx) {
         return idx === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1);
       }).join('');
-      el[key] = document.getElementById(ids[i]);
+      el[idKey(ids[i])] = document.getElementById(ids[i]);
     }
   }
+  function idKey(id) {
+    var parts = id.split('-');
+    return parts.map(function(p, idx) { return idx === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1); }).join('');
+  }
 
-  // ── Wall-clock frame computation ──
-  function computeFrame() {
-    if (!demoStartAt) return { phase: 'idle', idx: 0, chars: 0, ttfa: 240 };
-    var sp = demoSpeed;
-    var CPS = 55 * sp;
-    var PAUSE = 1300 / sp;
-    var rem = Date.now() - demoStartAt;
+  // ── Utility: escape HTML ──
+  function esc(s) {
+    var div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
 
-    for (var i = 0; i < SCRIPT.length; i++) {
-      var len = SCRIPT[i].text.length;
-      var typeMs = len / CPS * 1000;
-      var ttfa = 200 + (i * 37) % 90;
-
-      if (rem < typeMs) {
-        return { phase: 'playing', idx: i, chars: Math.max(0, Math.floor(rem / 1000 * CPS)), ttfa: ttfa };
-      }
-      rem -= typeMs;
-
-      if (i === SCRIPT.length - 1) break;
-
-      if (rem < PAUSE) {
-        return { phase: 'playing', idx: i, chars: len, ttfa: ttfa };
-      }
-      rem -= PAUSE;
-    }
-
-    var last = SCRIPT[SCRIPT.length - 1];
-    return { phase: 'done', idx: SCRIPT.length - 1, chars: last.text.length, ttfa: 240 };
+  // ── Connection status ──
+  function setConnStatus(status, label) {
+    el.connStatus.className = 'conn-status ' + status;
+    el.connStatus.textContent = label;
   }
 
   // ── Render: language chips ──
   function renderLangChips(activeLangs) {
     var html = '';
-    for (var i = 0; i < ALL_LANGS.length; i++) {
-      var name = ALL_LANGS[i];
-      var on = activeLangs.indexOf(name) >= 0;
+    var langs = clientConfig ? clientConfig.allowedLanguages : ALL_LANGS;
+    for (var i = 0; i < langs.length; i++) {
+      var code = langs[i];
+      var name = LANG_NAMES[code] || code;
+      var on = activeLangs.indexOf(code) >= 0 || activeLangs.indexOf(name) >= 0;
       html += '<span class="lang-chip' + (on ? ' active' : '') + '">' + esc(name) + '</span>';
     }
     el.langChips.innerHTML = html;
@@ -401,185 +374,303 @@
     el.waveform.innerHTML = bars;
   }
 
-  // ── Render: transcript ──
-  function renderTranscript(f) {
-    var playing = f.phase === 'playing';
-    var count = f.phase === 'idle' ? 0 : (playing ? f.idx + 1 : SCRIPT.length);
-
-    if (count === 0) {
-      el.transcriptEmpty.style.display = 'block';
-      el.transcriptList.innerHTML = '';
-      el.transcriptList.appendChild(el.transcriptEmpty);
-      return;
-    }
-
+  // ── Render: transcript turn ──
+  function addTranscriptTurn(speaker, text, lang, trans) {
     el.transcriptEmpty.style.display = 'none';
-    var html = '';
-    for (var i = 0; i < count; i++) {
-      var t = SCRIPT[i];
-      var isActive = playing && i === f.idx;
-      var ai = t.who === 'ai';
-      var typed = isActive ? t.text.slice(0, f.chars) : t.text;
-      var showTrans = !!t.trans && (!isActive || f.chars >= t.text.length);
+    var ai = speaker === 'ai';
+    var langDisplay = lang ? (LANG_NAMES[lang] || lang) : '';
 
-      html += '<div class="turn ' + (ai ? 'ai' : 'user') + '">';
-      html += '<div class="turn-meta">';
-      html += '<span class="turn-name" style="color:' + (ai ? '#2FD4C4' : '#FFB098') + ';">' + (ai ? 'ÀDÙNNÍ' : 'WOLE') + '</span>';
-      html += '<span class="turn-lang">' + esc(t.langs.join(' + ')) + '</span>';
-      html += '</div>';
-      html += '<div class="turn-bubble">' + esc(typed) + (isActive ? '<span class="caption-cursor">▎</span>' : '') + '</div>';
-      if (showTrans) {
-        html += '<div class="turn-trans">' + esc(t.trans) + '</div>';
-      }
-      html += '</div>';
-    }
-    el.transcriptList.innerHTML = html;
+    var html = '<div class="turn ' + (ai ? 'ai' : 'user') + '">';
+    html += '<div class="turn-meta">';
+    html += '<span class="turn-name" style="color:' + (ai ? '#2FD4C4' : '#FFB098') + ';">' + (ai ? 'ÀDÙNNÍ' : 'YOU') + '</span>';
+    if (langDisplay) html += '<span class="turn-lang">' + esc(langDisplay) + '</span>';
+    html += '</div>';
+    html += '<div class="turn-bubble">' + esc(text) + '</div>';
+    if (trans) html += '<div class="turn-trans">' + esc(trans) + '</div>';
+    html += '</div>';
 
-    // Auto-scroll to bottom
+    el.transcriptList.insertAdjacentHTML('beforeend', html);
     el.transcriptList.scrollTop = el.transcriptList.scrollHeight;
   }
 
-  // ── Main render ──
-  function render() {
-    var f = computeFrame();
-    var playing = f.phase === 'playing';
-    var done = f.phase === 'done';
-    var idle = f.phase === 'idle';
-    var active = playing ? SCRIPT[f.idx] : null;
-    var typed = active ? active.text.slice(0, f.chars) : '';
+  // ── Show thinking indicator ──
+  function showThinking() {
+    el.transcriptEmpty.style.display = 'none';
+    var html = '<div class="turn ai" id="thinking-indicator">';
+    html += '<div class="turn-meta"><span class="turn-name" style="color:#2FD4C4;">ÀDÙNNÍ</span></div>';
+    html += '<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>';
+    html += '</div>';
+    el.transcriptList.insertAdjacentHTML('beforeend', html);
+    el.transcriptList.scrollTop = el.transcriptList.scrollHeight;
+  }
 
-    var aiSpeaking = !!active && active.who === 'ai' && f.chars < active.text.length;
-    var userSpeaking = !!active && active.who === 'user' && f.chars < active.text.length;
-    var activeLangs = active ? active.langs : [];
+  function removeThinking() {
+    var indicator = document.getElementById('thinking-indicator');
+    if (indicator) indicator.remove();
+  }
 
-    // TTFA
-    el.ttfaVal.textContent = f.ttfa + ' ms';
-
-    // Idle overlay
-    el.idleOverlay.style.display = idle ? 'flex' : 'none';
-
-    // Speaking badge
+  // ── Update UI state ──
+  function updateUI() {
+    el.idleOverlay.style.display = connected ? 'none' : 'flex';
+    el.userTile.style.display = connected ? 'block' : 'none';
+    el.endCallBtn.style.display = connected ? 'flex' : 'none';
+    el.msgInput.disabled = !connected || aiSpeaking;
+    el.sendBtn.disabled = !connected || aiSpeaking;
     el.speakingBadge.style.display = aiSpeaking ? 'inline-block' : 'none';
-
-    // Language chips
-    renderLangChips(activeLangs);
-
-    // Waveform
+    el.avatarRing.className = aiSpeaking ? 'avatar-ring-pulse' : 'avatar-ring-static';
     renderWaveform(aiSpeaking, true);
 
-    // Caption bar
-    if (playing) {
-      el.captionBar.style.display = 'block';
-      el.captionLabel.textContent = active.who === 'ai' ? 'ÀDÙNNÍ · SPEAKING' : 'WOLE · TRANSCRIBING';
-      el.captionLabel.style.color = active.who === 'user' ? '#FFB098' : '#2FD4C4';
-      el.captionLangs.textContent = active.langs.join(' + ');
-      el.captionText.innerHTML = esc(typed) + '<span class="caption-cursor">▎</span>';
-    } else {
-      el.captionBar.style.display = 'none';
-    }
-
-    // User tile
-    el.userTile.style.display = idle ? 'none' : 'block';
     if (userSpeaking) {
       el.userTileInner.classList.add('speaking');
       el.userTileLabel.classList.add('speaking');
-      el.userTileLabel.textContent = 'WOLE · SPEAKING';
+      el.userTileLabel.textContent = 'YOU · SPEAKING';
       el.userTileWf.style.display = 'flex';
     } else {
       el.userTileInner.classList.remove('speaking');
       el.userTileLabel.classList.remove('speaking');
-      el.userTileLabel.textContent = 'WOLE';
+      el.userTileLabel.textContent = 'YOU';
       el.userTileWf.style.display = 'none';
     }
 
-    // Mic button
-    el.micBtnActive.style.display = userSpeaking ? 'flex' : 'none';
-    el.micBtnIdle.style.display = userSpeaking ? 'none' : 'flex';
-
-    // Replay button
-    el.replayBtn.style.display = done ? 'inline-block' : 'none';
-
-    // Transcript
-    renderTranscript(f);
+    el.turnCount.textContent = turnCount;
+    el.latencyVal.textContent = lastLatency > 0 ? lastLatency + ' ms' : '— ms';
   }
 
-  // ── Driver loop ──
-  function ensureDriver() {
-    if (driverAlive) return;
-    driverAlive = true;
-
-    function check() {
-      if (!demoStartAt || lastFrameKey === 'done') return;
-      var f = computeFrame();
-      var key = f.phase === 'done' ? 'done' : f.phase + ':' + f.idx + ':' + f.chars;
-      if (key !== lastFrameKey) {
-        lastFrameKey = key;
-        render();
+  // ── Fetch client config from backend ──
+  async function fetchClientConfig() {
+    try {
+      var resp = await fetch(API_BASE + '/info');
+      if (resp.ok) {
+        var data = await resp.json();
+        clientConfig = data;
+        if (data.branding && data.branding.agentName) {
+          el.agentName.textContent = data.branding.agentName;
+          el.brandName.textContent = data.branding.agentName;
+        }
+        if (data.branding && data.branding.agentSubtitle) {
+          el.agentSubtitle.textContent = data.branding.agentSubtitle;
+        } else {
+          el.agentSubtitle.textContent = 'AI Voice Agent · ' + (data.clientName || 'Live');
+        }
+        renderLangChips([]);
+        el.idleDesc.textContent = 'An AI voice agent for ' + (data.clientName || 'Savanna Bank') + '. She speaks ' +
+          (data.allowedLanguages || []).map(function(l) { return LANG_NAMES[l] || l; }).join(', ') +
+          ' and code-switches mid-conversation. Start a live call to chat with her.';
       }
+    } catch (err) {
+      console.error('Failed to fetch client config:', err);
     }
+  }
 
-    function loop() {
-      check();
-      if (lastFrameKey !== 'done') {
-        rafId = requestAnimationFrame(loop);
+  // ── Start a live call ──
+  async function startCall() {
+    el.startBtn.disabled = true;
+    el.idleError.style.display = 'none';
+
+    try {
+      // 1. Get demo JWT token
+      setConnStatus('connecting', 'AUTHENTICATING…');
+      var authResp = await fetch(API_BASE + '/v1/auth/demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: 'savanna-bank' })
+      });
+      if (!authResp.ok) throw new Error('Authentication failed (' + authResp.status + ')');
+      var authData = await authResp.json();
+      jwtToken = authData.token;
+
+      // 2. Create a session
+      setConnStatus('connecting', 'CREATING SESSION…');
+      var sessionResp = await fetch(API_BASE + '/v1/sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + jwtToken
+        },
+        body: JSON.stringify({
+          callerId: 'web-user-' + Date.now().toString(36),
+          ndprConsent: true,
+          metadata: { source: 'web-demo', userAgent: navigator.userAgent.substring(0, 100) }
+        })
+      });
+      if (!sessionResp.ok) throw new Error('Session creation failed (' + sessionResp.status + ')');
+      var sessionData = await sessionResp.json();
+      sessionId = sessionData.id;
+      streamToken = sessionData.streamToken;
+      el.sessionId.textContent = sessionId.substring(0, 12) + '…';
+
+      // 3. Connect WebSocket
+      setConnStatus('connecting', 'CONNECTING…');
+      var wsUrl = WS_BASE + '/v1/sessions/' + sessionId + '/stream?token=' + streamToken;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = function() {
+        connected = true;
+        setConnStatus('connected', 'CONNECTED');
+        updateUI();
+        el.msgInput.focus();
+      };
+
+      ws.onmessage = function(event) {
+        handleWsMessage(JSON.parse(event.data));
+      };
+
+      ws.onerror = function(err) {
+        console.error('WebSocket error:', err);
+        setConnStatus('error', 'CONNECTION ERROR');
+      };
+
+      ws.onclose = function() {
+        connected = false;
+        aiSpeaking = false;
+        userSpeaking = false;
+        setConnStatus('disconnected', 'OFFLINE');
+        updateUI();
+        el.startBtn.disabled = false;
+        el.startBtn.textContent = '▶ START LIVE CALL';
+      };
+
+    } catch (err) {
+      console.error('Start call error:', err);
+      setConnStatus('error', 'ERROR');
+      el.idleError.textContent = err.message || 'Failed to connect to the backend. Please try again.';
+      el.idleError.style.display = 'block';
+      el.startBtn.disabled = false;
+    }
+  }
+
+  // ── Handle WebSocket messages ──
+  function handleWsMessage(msg) {
+    if (msg.type === 'transcript') {
+      var turn = msg.turn;
+      lastLatency = turn.latencyMs || lastLatency;
+
+      if (turn.speaker === 'ai') {
+        aiSpeaking = true;
+        userSpeaking = false;
+        removeThinking();
+        addTranscriptTurn('ai', turn.text, turn.language, turn.englishTranslation);
+        turnCount++;
+
+        // Show caption
+        el.captionBar.style.display = 'block';
+        el.captionLabel.textContent = 'ÀDÙNNÍ · SPEAKING';
+        el.captionLabel.style.color = '#2FD4C4';
+        el.captionLangs.textContent = turn.language ? (LANG_NAMES[turn.language] || turn.language) : '';
+        el.captionText.innerHTML = esc(turn.text);
+
+        // Highlight active language
+        var activeLangs = turn.language ? [turn.language] : [];
+        renderLangChips(activeLangs);
+
+        updateUI();
+
+        // Reset AI speaking after a delay
+        setTimeout(function() {
+          aiSpeaking = false;
+          el.captionBar.style.display = 'none';
+          updateUI();
+        }, Math.max(1500, turn.text.length * 40));
+
+      } else if (turn.speaker === 'user') {
+        userSpeaking = true;
+        addTranscriptTurn('user', turn.text, turn.language, turn.englishTranslation);
+        turnCount++;
+
+        // Show caption
+        el.captionBar.style.display = 'block';
+        el.captionLabel.textContent = 'YOU · TRANSCRIBING';
+        el.captionLabel.style.color = '#FFB098';
+        el.captionLangs.textContent = turn.language ? (LANG_NAMES[turn.language] || turn.language) : '';
+        el.captionText.innerHTML = esc(turn.text);
+
+        var userLangs = turn.language ? [turn.language] : [];
+        renderLangChips(userLangs);
+
+        updateUI();
+
+        // Show thinking indicator
+        setTimeout(function() {
+          userSpeaking = false;
+          updateUI();
+          if (connected) showThinking();
+        }, 600);
       }
+
+    } else if (msg.type === 'audio') {
+      // Audio received — could play it if we had audio support
+      // For now, we just note it
+      console.log('[audio] received audio response');
+
+    } else if (msg.type === 'turn.complete') {
+      // Turn completed
+      updateUI();
+
+    } else if (msg.type === 'session.ended') {
+      connected = false;
+      setConnStatus('disconnected', 'CALL ENDED');
+      updateUI();
+      el.startBtn.disabled = false;
+      el.startBtn.textContent = '▶ START NEW CALL';
+
+    } else if (msg.type === 'error') {
+      console.error('[ws] error:', msg.message);
+      removeThinking();
     }
-    rafId = requestAnimationFrame(loop);
-    intervalId = setInterval(check, 250);
   }
 
-  // ── Start demo ──
-  function startDemo() {
-    lastFrameKey = '';
-    demoStartAt = Date.now();
-    render();
-    ensureDriver();
+  // ── Send a text message ──
+  function sendMessage() {
+    var text = el.msgInput.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    ws.send(JSON.stringify({ type: 'text', text: text }));
+    el.msgInput.value = '';
+    userSpeaking = true;
+    updateUI();
   }
 
-  // ── Cleanup ──
-  function cleanup() {
-    if (rafId) cancelAnimationFrame(rafId);
-    if (intervalId) clearInterval(intervalId);
-    rafId = null;
-    intervalId = null;
-    driverAlive = false;
-  }
-
-  // ── Utility: escape HTML ──
-  function esc(s) {
-    var div = document.createElement('div');
-    div.textContent = s;
-    return div.innerHTML;
+  // ── End the call ──
+  function endCall() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'end' }));
+    }
+    if (ws) {
+      ws.close();
+    }
   }
 
   // ── Init ──
   function init() {
     cacheDOM();
 
-    // Initial render (idle state)
+    // Initial render
     renderLangChips([]);
     renderWaveform(false, true);
+    setConnStatus('disconnected', 'OFFLINE');
+
+    // Fetch client config from backend
+    fetchClientConfig();
 
     // Event listeners
-    el.startBtn.addEventListener('click', startDemo);
-    el.replayBtn.addEventListener('click', function() {
-      cleanup();
-      startDemo();
-    });
+    el.startBtn.addEventListener('click', startCall);
+    el.sendBtn.addEventListener('click', sendMessage);
+    el.endCallBtn.addEventListener('click', endCall);
 
-    // Speed slider
-    el.speedSlider.addEventListener('input', function() {
-      demoSpeed = parseFloat(this.value);
-      el.speedVal.textContent = demoSpeed.toFixed(2) + '×';
-      // Re-render immediately to reflect new speed
-      if (demoStartAt && lastFrameKey !== 'done') {
-        lastFrameKey = '';
-        render();
+    el.msgInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
       }
     });
 
     // Cleanup on page unload
-    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('beforeunload', function() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'end' }));
+        ws.close();
+      }
+    });
   }
 
   if (document.readyState === 'loading') {

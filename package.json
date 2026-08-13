@@ -18,7 +18,7 @@
     "dev:action-executor": "npm run dev -w @adunni/action-executor",
     "dev:config-service": "npm run dev -w @adunni/config-service",
     "dev:session-store": "npm run dev -w @adunni/session-store",
-    "db:migrate": "node packages/session-store/scripts/migrate.js",
+    "db:migrate": "echo 'Migrations run automatically via Docker init scripts. For manual setup, apply packages/session-store/sql/init.sql and packages/security/sql/security_migration.sql'",
     "db:seed": "node packages/session-store/scripts/seed.js",
     "test": "jest --config packages/integration-tests/jest.config.js",
     "lint": "eslint packages/**/*.ts",

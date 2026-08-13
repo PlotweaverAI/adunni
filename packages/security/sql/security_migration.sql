@@ -18,10 +18,7 @@ ALTER TABLE sessions
 
 -- Add retention enforcement tracking
 ALTER TABLE sessions
-  ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ
-  GENERATED ALWAYS AS (
-    started_at + INTERVAL '90 days'
-  ) STORED;
+  ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ;
 
 -- Indexes for audit queries
 CREATE INDEX IF NOT EXISTS idx_audit_events_session_id ON audit_events (session_id);
