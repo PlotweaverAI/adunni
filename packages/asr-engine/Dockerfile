@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir setuptools wheel && \
     pip install --no-cache-dir fastapi==0.115.6 "uvicorn[standard]==0.34.0" pydantic==2.10.4 && \
     pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir transformers==4.46.3 soundfile==0.12.1 numpy==1.26.4 && \
+    pip install --no-cache-dir transformers==4.46.3 soundfile==0.12.1 numpy==1.26.4 sentencepiece==0.2.0 sacremoses==0.1.1 && \
     pip install --no-cache-dir --no-build-isolation openai-whisper==20231117 && \
     pip install --no-cache-dir stable-ts==2.16.0
 
@@ -38,14 +38,8 @@ RUN mkdir -p /models
 # Pre-download whisper-tiny model so first transcription is fast
 RUN python -c "import stable_whisper; stable_whisper.load_model('tiny', device='cpu')" 2>/dev/null || true
 
-# Pre-download translation models (Helsinki-NLP opus-mt) for African languages
-RUN python -c "from transformers import pipeline; \
-  pipeline('translation', model='Helsinki-NLP/opus-mt-yo-en'); \
-  pipeline('translation', model='Helsinki-NLP/opus-mt-ha-en'); \
-  pipeline('translation', model='Helsinki-NLP/opus-mt-ig-en'); \
-  pipeline('translation', model='Helsinki-NLP/opus-mt-en-yo'); \
-  pipeline('translation', model='Helsinki-NLP/opus-mt-en-ha'); \
-  pipeline('translation', model='Helsinki-NLP/opus-mt-en-ig')" 2>/dev/null || true
+# Pre-download NLLB translation model (supports all African languages bidirectionally)
+RUN python -c "from transformers import pipeline; pipeline('translation', model='facebook/nllb-200-distilled-600M')" 2>/dev/null || true
 
 EXPOSE 3010
 

@@ -878,7 +878,6 @@ async function processUserUtteranceWithLanguage(
 
   // ── Translate AI response back to user's language if different ──
   let aiTextTranslated = aiText;
-  let aiTranslation = '';
   if (language !== targetLang && aiText) {
     try {
       const aiTranslateResp = await fetch(`${ASR_SERVICE_URL}/translate`, {
@@ -890,7 +889,6 @@ async function processUserUtteranceWithLanguage(
       if (aiTranslateResp.ok) {
         const aiTranslateResult = await aiTranslateResp.json() as { translated_text: string };
         aiTextTranslated = aiTranslateResult.translated_text;
-        aiTranslation = aiTextTranslated;
       }
     } catch (err) {
       console.error('[gateway] translation error (AI):', err);

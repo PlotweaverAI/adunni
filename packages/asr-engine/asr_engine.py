@@ -202,37 +202,42 @@ class TranscribeRequest(BaseModel):
     encoding: Optional[str] = "wav"
 
 
-# ── Translation models (Helsinki-NLP opus-mt) ──
-# Maps (source_lang, target_lang) -> HuggingFace model ID
-TRANSLATION_MODELS = {
-    ("yo", "en-NG"): "Helsinki-NLP/opus-mt-yo-en",
-    ("ha", "en-NG"): "Helsinki-NLP/opus-mt-ha-en",
-    ("ig", "en-NG"): "Helsinki-NLP/opus-mt-ig-en",
-    ("pcm", "en-NG"): "Helsinki-NLP/opus-mt-pcm-en",
-    ("en-NG", "yo"): "Helsinki-NLP/opus-mt-en-yo",
-    ("en-NG", "ha"): "Helsinki-NLP/opus-mt-en-ha",
-    ("en-NG", "ig"): "Helsinki-NLP/opus-mt-en-ig",
+# ── Translation (Meta NLLB — No Language Left Behind) ──
+# Single model handles all 200 languages bidirectionally
+# https://huggingface.co/facebook/nllb-200-distilled-600M
+
+NLLB_MODEL = "facebook/nllb-200-distilled-600M"
+
+# Adunni LanguageCode -> NLLB FLORES-200 code
+NLLB_LANG_MAP = {
+    "en-NG": "eng_Latn",
+    "yo":    "yor_Latn",
+    "ha":    "hau_Latn",
+    "ig":    "ibo_Latn",
+    "pcm":   "pcm_Latn",  # Nigerian Pidgin
 }
 
-_loaded_translators = {}
+_nllb_translator = None
 
 
-def _load_translator(model_id: str):
-    """Load a translation pipeline (cached)."""
-    if model_id not in _loaded_translators:
+def _load_nllb():
+    """Load the NLLB translation pipeline (cached singleton)."""
+    global _nllb_translator
+    if _nllb_translator is None:
         from transformers import pipeline as hf_pipeline
-        log.info(f"Loading translation model: {model_id} (device={DEVICE})")
-        _loaded_translators[model_id] = hf_pipeline(
+        log.info(f"Loading NLLB translation model: {NLLB_MODEL} (device={DEVICE})")
+        _nllb_translator = hf_pipeline(
             "translation",
-            model=model_id,
+            model=NLLB_MODEL,
             device=0 if DEVICE == "cuda" else -1,
+            max_length=512,
         )
-    return _loaded_translators[model_id]
+    return _nllb_translator
 
 
 def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
     """
-    Translate text from source_lang to target_lang using Helsinki-NLP opus-mt models.
+    Translate text from source_lang to target_lang using NLLB.
 
     Returns:
         { translated_text, source_language, target_language, model }
@@ -246,30 +251,23 @@ def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
             "model": "none",
         }
 
-    # Normalize language codes (en-NG -> en for model lookup)
-    src_norm = source_lang if source_lang in ("yo", "ha", "ig", "pcm") else "en-NG"
-    tgt_norm = target_lang if target_lang in ("yo", "ha", "ig", "pcm") else "en-NG"
+    # Map Adunni codes to NLLB FLORES-200 codes
+    src_flores = NLLB_LANG_MAP.get(source_lang, "eng_Latn")
+    tgt_flores = NLLB_LANG_MAP.get(target_lang, "eng_Latn")
 
-    model_key = (src_norm, tgt_norm)
-    if model_key not in TRANSLATION_MODELS:
-        # Try reverse direction or fallback to English
-        raise HTTPException(
-            status_code=400,
-            detail=f"Translation from {source_lang} to {target_lang} not supported. "
-                   f"Supported pairs: {list(TRANSLATION_MODELS.keys())}"
-        )
-
-    model_id = TRANSLATION_MODELS[model_key]
-    translator = _load_translator(model_id)
-
-    result = translator(text, max_length=512)
+    translator = _load_nllb()
+    result = translator(
+        text,
+        src_lang=src_flores,
+        tgt_lang=tgt_flores,
+    )
     translated = result[0]["translation_text"].strip() if result else text
 
     return {
         "translated_text": translated,
         "source_language": source_lang,
         "target_language": target_lang,
-        "model": model_id,
+        "model": NLLB_MODEL,
     }
 
 

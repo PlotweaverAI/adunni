@@ -15,3 +15,7 @@ openai-whisper==20231117
 # Audio handling
 soundfile==0.12.1
 numpy==1.26.4
+
+# Translation (Helsinki-NLP opus-mt requires sentencepiece)
+sentencepiece==0.2.0
+sacremoses==0.1.1
