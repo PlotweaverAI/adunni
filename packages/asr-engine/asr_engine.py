@@ -32,6 +32,16 @@ log = logging.getLogger("asr-engine")
 # ── Config ──
 PORT = int(os.getenv("PORT", "3010"))
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+
+
+def _torch_cuda_available() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
 DEVICE = "cuda" if _torch_cuda_available() else "cpu"
 
 # Model registry — mirrors the Plotweaver-AI-Models repo
@@ -62,14 +72,6 @@ SUPPORTED_LANGUAGES = list(LANG_TO_MODEL.keys())
 _loaded_models: dict[str, object] = {}
 _transformers_pipeline = None
 _stable_whisper = None
-
-
-def _torch_cuda_available() -> bool:
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
 
 
 def _get_transformers_pipeline():

@@ -17,7 +17,13 @@ WORKDIR /app
 
 # Install Python dependencies first (better Docker layer caching)
 COPY packages/asr-engine/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir setuptools wheel && \
+    pip install --no-cache-dir fastapi==0.115.6 "uvicorn[standard]==0.34.0" pydantic==2.10.4 && \
+    pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 && \
+    pip install --no-cache-dir transformers==4.46.3 soundfile==0.12.1 numpy==1.26.4 && \
+    pip install --no-cache-dir --no-build-isolation openai-whisper==20231117 && \
+    pip install --no-cache-dir stable-ts==2.16.0
 
 # Copy the application
 COPY packages/asr-engine/ ./
