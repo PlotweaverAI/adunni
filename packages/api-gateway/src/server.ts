@@ -26,6 +26,7 @@ import {
   type AuthenticatedRequest,
   type AuditEventType,
 } from '@adunni/security';
+import { TavusClient } from './tavus.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const JWT_SECRET = process.env.JWT_SECRET ?? 'dev_jwt_secret_change_in_production';
@@ -35,6 +36,8 @@ const TLS_CERT = process.env.TLS_CERT_PATH;
 const TLS_KEY = process.env.TLS_KEY_PATH;
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? 'savanna-bank';
+const TAVUS_API_KEY = process.env.TAVUS_API_KEY ?? '';
+const tavus = TAVUS_API_KEY ? new TavusClient(TAVUS_API_KEY) : null;
 
 const ASR_SERVICE_URL = process.env.ASR_SERVICE_URL ?? 'http://localhost:3001';
 const TTS_SERVICE_URL = process.env.TTS_SERVICE_URL ?? 'http://localhost:3002';
@@ -397,6 +400,101 @@ app.get('/v1/callers/:callerId/export', authMiddleware, requireRole('admin', 'op
   }
 });
 
+// ── POST /v1/video/conversation — Create a Tavus CVI video conversation (echo mode) ──
+app.post('/v1/video/conversation', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!tavus) {
+      return res.status(503).json({ error: 'Video interface not configured. Set TAVUS_API_KEY.' });
+    }
+
+    const { palId, sessionId } = req.body;
+    const conversationName = sessionId ? `Adunni Session ${sessionId.slice(0, 8)}` : 'Adunni Session';
+
+    let echoPalId = palId;
+    if (!echoPalId) {
+      const pal = await tavus.getOrCreateEchoPal('Adunni Echo');
+      echoPalId = pal.pal_id;
+    }
+
+    const conversation = await tavus.createConversation(echoPalId, conversationName);
+
+    await auditLogger.logFromRequest(req, 'session_start', {
+      sessionId: sessionId,
+      videoConversationId: conversation.conversation_id,
+      action: 'video_conversation_created',
+    });
+
+    res.status(201).json({
+      conversationId: conversation.conversation_id,
+      conversationUrl: conversation.conversation_url,
+      status: conversation.status,
+      palId: echoPalId,
+    });
+  } catch (err) {
+    console.error('[gateway] createVideoConversation error:', err);
+    res.status(500).json({ error: 'Failed to create video conversation', detail: (err as Error).message });
+  }
+});
+
+// ── POST /v1/video/conversation/:conversationId/end — End a Tavus video conversation ──
+app.post('/v1/video/conversation/:conversationId/end', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!tavus) {
+      return res.status(503).json({ error: 'Video interface not configured.' });
+    }
+
+    await tavus.endConversation(req.params.conversationId);
+
+    await auditLogger.logFromRequest(req, 'session_end', {
+      videoConversationId: req.params.conversationId,
+      action: 'video_conversation_ended',
+    });
+
+    res.json({ status: 'ended', conversationId: req.params.conversationId });
+  } catch (err) {
+    console.error('[gateway] endVideoConversation error:', err);
+    res.status(500).json({ error: 'Failed to end video conversation' });
+  }
+});
+
+// ── POST /v1/video/echo — Send an echo message to a Tavus video conversation (text → face speaks) ──
+app.post('/v1/video/echo', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!tavus) {
+      return res.status(503).json({ error: 'Video interface not configured.' });
+    }
+
+    const { conversationUrl, conversationId, text, audio, sampleRate, inferenceId, done } = req.body;
+    if (!conversationUrl || !conversationId) {
+      return res.status(400).json({ error: 'conversationUrl and conversationId are required' });
+    }
+    if (!text && !audio) {
+      return res.status(400).json({ error: 'Either text or audio is required' });
+    }
+
+    await tavus.sendEchoMessage(conversationUrl, conversationId, text, {
+      audio,
+      sampleRate,
+      inferenceId,
+      done,
+    });
+
+    res.json({ status: 'echo_sent' });
+  } catch (err) {
+    console.error('[gateway] videoEcho error:', err);
+    res.status(500).json({ error: 'Failed to send echo message', detail: (err as Error).message });
+  }
+});
+
+// ── GET /v1/video/status — Check if video interface is available ──
+app.get('/v1/video/status', (_req, res) => {
+  res.json({
+    available: !!tavus,
+    echoMode: true,
+    provider: 'tavus',
+  });
+});
+
 // ── Admin: GET /v1/audit/events — Query audit log ──
 app.get('/v1/audit/events', authMiddleware, requireRole('admin'), async (req: AuthenticatedRequest, res) => {
   try {
@@ -450,6 +548,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
   let config: ClientConfig | null = null;
   let sessionActive = true;
   let setupDone = false;
+  let videoConversation: { conversationId: string; conversationUrl: string } | null = null;
 
   // Register message/close handlers BEFORE async setup so early messages aren't lost
   ws.on('message', async (data: Buffer) => {
@@ -486,6 +585,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
                   encoding: msg.encoding || 'webm',
                   language: msg.language || null,
                 }),
+                signal: AbortSignal.timeout(120000), // 2 min timeout for model download + inference
               });
 
               if (asrEngineResp.ok) {
@@ -499,7 +599,8 @@ wss.on('connection', async (ws: WebSocket, req) => {
                     clientId,
                     config,
                     ws,
-                    turnIndex
+                    turnIndex,
+                    videoConversation
                   );
                   turnIndex += 2;
                 }
@@ -516,9 +617,18 @@ wss.on('connection', async (ws: WebSocket, req) => {
           }
         }
       } else if (msg.type === 'text') {
-        await processUserUtterance(msg.text, sessionId, clientId, config, ws, turnIndex);
+        await processUserUtterance(msg.text, sessionId, clientId, config, ws, turnIndex, videoConversation);
         turnIndex += 2;
+      } else if (msg.type === 'video') {
+        videoConversation = {
+          conversationId: msg.conversationId,
+          conversationUrl: msg.conversationUrl,
+        };
+        ws.send(JSON.stringify({ type: 'video.ready', conversationId: msg.conversationId }));
       } else if (msg.type === 'end') {
+        if (videoConversation && tavus) {
+          try { await tavus.endConversation(videoConversation.conversationId); } catch (e) { console.error('[gateway] video end error:', e); }
+        }
         await endSession(sessionId, clientId, ws);
         sessionActive = false;
       }
@@ -529,6 +639,9 @@ wss.on('connection', async (ws: WebSocket, req) => {
   });
 
   ws.on('close', async () => {
+    if (videoConversation && tavus) {
+      try { await tavus.endConversation(videoConversation.conversationId); } catch (e) { console.error('[gateway] video end on close error:', e); }
+    }
     if (sessionActive) {
       await endSession(sessionId, clientId, ws);
       sessionActive = false;
@@ -560,7 +673,8 @@ async function processUserUtterance(
   clientId: string,
   config: ClientConfig | null,
   ws: WebSocket,
-  currentTurnIndex: number
+  currentTurnIndex: number,
+  videoConversation: { conversationId: string; conversationUrl: string } | null = null
 ) {
   const asrResp = await fetch(`${ASR_SERVICE_URL}/detect-language`, {
     method: 'POST',
@@ -571,7 +685,7 @@ async function processUserUtterance(
 
   return processUserUtteranceWithLanguage(
     text, asrResult.language, asrResult.confidence,
-    sessionId, clientId, config, ws, currentTurnIndex
+    sessionId, clientId, config, ws, currentTurnIndex, videoConversation
   );
 }
 
@@ -583,7 +697,8 @@ async function processUserUtteranceWithLanguage(
   clientId: string,
   config: ClientConfig | null,
   ws: WebSocket,
-  currentTurnIndex: number
+  currentTurnIndex: number,
+  videoConversation: { conversationId: string; conversationUrl: string } | null = null
 ) {
   const startTime = Date.now();
 
@@ -606,6 +721,18 @@ async function processUserUtteranceWithLanguage(
     type: 'transcript',
     turn: { speaker: 'user', language, text, confidence: languageConfidence },
   }));
+
+  // Send user transcript to video face as echo (so face can react)
+  if (videoConversation && tavus) {
+    try {
+      await tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, text, {
+        inferenceId: `user-${sessionId}-${currentTurnIndex}`,
+        done: true,
+      });
+    } catch (e) {
+      console.error('[gateway] video echo (user) error:', e);
+    }
+  }
 
   const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`);
   const context = await ctxResp.json() as ConversationContext;
@@ -746,6 +873,18 @@ async function processUserUtteranceWithLanguage(
     type: 'transcript',
     turn: { speaker: 'ai', language: aiLanguage, text: aiText, confidence: orchResult.confidence },
   }));
+
+  // Send AI response to video face as echo — face will speak with lip-sync
+  if (videoConversation && tavus) {
+    try {
+      await tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiText, {
+        inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
+        done: true,
+      });
+    } catch (e) {
+      console.error('[gateway] video echo (ai) error:', e);
+    }
+  }
 
   if (config) {
     try {

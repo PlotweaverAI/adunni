@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Àdùnní — AI Voice Agent | Live Demo</title>
+<script crossorigin src="https://unpkg.com/@daily-co/daily-js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
@@ -47,6 +48,9 @@
   .avatar-ring-pulse { position: absolute; inset: -8px; border-radius: 50%; border: 2px solid #2FD4C4; animation: ringPulse 1.4s ease-out infinite; }
   .avatar-ring-static { position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(47,212,196,0.35); padding: 6px; box-sizing: border-box; }
   .avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; background: #0E1417; display: block; }
+  .avatar-video { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; background: #0E1417; display: none; }
+  .avatar-video.active { display: block; }
+  .avatar-video.active ~ .avatar-placeholder { display: none; }
 
   .name-row { display: flex; align-items: center; justify-content: center; gap: 10px; }
   .name { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
@@ -194,6 +198,7 @@
       <div class="stage-center">
         <div class="avatar-wrap" id="avatar-wrap">
           <div class="avatar-ring-static" id="avatar-ring">
+            <video class="avatar-video" id="avatar-video" autoplay playsinline muted></video>
             <div class="avatar-placeholder" id="avatar-placeholder">
               <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="60" cy="45" r="22" fill="none" stroke="#2FD4C4" stroke-width="3" opacity="0.4"/>
@@ -325,17 +330,22 @@
   var audioContext = null;
   var transcribing = false;
 
+  // ── Video state ──
+  var dailyCall = null;
+  var videoConversation = null; // { conversationId, conversationUrl }
+  var videoEnabled = false;
+
   // ── DOM refs ──
   var el = {};
   function cacheDOM() {
-    var ids = ['app','stage','avatar-wrap','avatar-ring','speaking-badge','lang-chips','waveform',
+    var ids = ['app','stage','avatar-wrap','avatar-ring','avatar-video','avatar-placeholder','speaking-badge','lang-chips','waveform',
       'caption-bar','caption-label','caption-langs','caption-text',
       'idle-overlay','start-btn','idle-error','idle-desc',
       'user-tile','user-tile-inner','user-tile-label','user-tile-wf',
       'msg-input','send-btn','end-call-btn','controls','mic-btn',
       'transcript-list','transcript-empty',
       'conn-status','session-id','latency-val','turn-count',
-      'agent-name','agent-subtitle','brand-name','avatar-placeholder'];
+      'agent-name','agent-subtitle','brand-name'];
     for (var i = 0; i < ids.length; i++) {
       var parts = ids[i].split('-');
       var key = parts.map(function(p, idx) {
@@ -522,7 +532,37 @@
       streamToken = sessionData.streamToken;
       el.sessionId.textContent = sessionId.substring(0, 12) + '…';
 
-      // 3. Connect WebSocket
+      // 3. Check if video interface is available
+      try {
+        var videoStatusResp = await fetch(API_BASE + '/v1/video/status');
+        var videoStatus = await videoStatusResp.json();
+        videoEnabled = videoStatus.available === true;
+      } catch (e) {
+        videoEnabled = false;
+      }
+
+      // 4. Create video conversation if available
+      if (videoEnabled) {
+        try {
+          setConnStatus('connecting', 'STARTING VIDEO…');
+          var videoResp = await fetch(API_BASE + '/v1/video/conversation', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + jwtToken
+            },
+            body: JSON.stringify({ sessionId: sessionId })
+          });
+          if (videoResp.ok) {
+            videoConversation = await videoResp.json();
+          }
+        } catch (e) {
+          console.error('Video conversation creation failed:', e);
+          videoEnabled = false;
+        }
+      }
+
+      // 5. Connect WebSocket
       setConnStatus('connecting', 'CONNECTING…');
       var wsUrl = WS_BASE + '/v1/sessions/' + sessionId + '/stream?token=' + streamToken;
       ws = new WebSocket(wsUrl);
@@ -530,6 +570,21 @@
       ws.onopen = function() {
         connected = true;
         setConnStatus('connected', 'CONNECTED');
+
+        // Send video conversation info to backend so it can send echo messages
+        if (videoConversation && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'video',
+            conversationId: videoConversation.conversationId,
+            conversationUrl: videoConversation.conversationUrl
+          }));
+        }
+
+        // Join Daily.co room to show AI face video
+        if (videoConversation && videoConversation.conversationUrl) {
+          joinVideoRoom(videoConversation.conversationUrl);
+        }
+
         updateUI();
         el.msgInput.focus();
       };
@@ -549,6 +604,7 @@
         userSpeaking = false;
         transcribing = false;
         if (isRecording) stopRecording();
+        leaveVideoRoom();
         setConnStatus('disconnected', 'OFFLINE');
         updateUI();
         el.startBtn.disabled = false;
@@ -778,6 +834,9 @@
       // Turn completed
       updateUI();
 
+    } else if (msg.type === 'video.ready') {
+      console.log('[video] Backend acknowledged video conversation:', msg.conversationId);
+
     } else if (msg.type === 'session.ended') {
       connected = false;
       setConnStatus('disconnected', 'CALL ENDED');
@@ -811,6 +870,73 @@
     if (ws) {
       ws.close();
     }
+    leaveVideoRoom();
+  }
+
+  // ── Video: Join Daily.co room to show AI face ──
+  function joinVideoRoom(conversationUrl) {
+    try {
+      if (!window.Daily) {
+        console.error('[video] Daily.js not loaded');
+        return;
+      }
+
+      dailyCall = window.Daily.createCallObject({
+        audioSource: false,
+        videoSource: false,
+        subscribeToTracks: true,
+      });
+
+      dailyCall.on('participant-updated', function(event) {
+        var p = event && event.participant;
+        if (p && p.local === false && p.tracks && p.tracks.video) {
+          var trackState = p.tracks.video;
+          if (trackState.state === 'playable' && trackState.track) {
+            showVideoTrack(trackState.track);
+          }
+        }
+      });
+
+      dailyCall.on('error', function(event) {
+        console.error('[video] Daily error:', event);
+      });
+
+      dailyCall.join({ url: conversationUrl });
+    } catch (err) {
+      console.error('[video] joinVideoRoom error:', err);
+    }
+  }
+
+  // ── Video: Show the remote participant's video track on the avatar ──
+  function showVideoTrack(track) {
+    var videoEl = el.avatarVideo;
+    if (!videoEl) return;
+
+    if (videoEl.srcObject !== track) {
+      videoEl.srcObject = new MediaStream([track]);
+      videoEl.classList.add('active');
+      videoEl.play().catch(function(e) {
+        console.error('[video] autoplay error:', e);
+      });
+    }
+  }
+
+  // ── Video: Leave Daily.co room ──
+  function leaveVideoRoom() {
+    if (dailyCall) {
+      try {
+        dailyCall.leave();
+      } catch (e) {
+        console.error('[video] leave error:', e);
+      }
+      dailyCall = null;
+    }
+    if (el.avatarVideo) {
+      el.avatarVideo.classList.remove('active');
+      el.avatarVideo.srcObject = null;
+    }
+    videoConversation = null;
+    videoEnabled = false;
   }
 
   // ── Init ──
@@ -841,6 +967,7 @@
     // Cleanup on page unload
     window.addEventListener('beforeunload', function() {
       if (isRecording) stopRecording();
+      leaveVideoRoom();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'end' }));
         ws.close();
