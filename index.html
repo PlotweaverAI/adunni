@@ -657,6 +657,12 @@
         // Combine all audio chunks and send as final
         if (audioChunks.length > 0) {
           var blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+          if (blob.size < 200) {
+            console.warn('[mic] Audio too short (' + blob.size + ' bytes), skipping');
+            audioChunks = [];
+            stream.getTracks().forEach(function(track) { track.stop(); });
+            return;
+          }
           var reader = new FileReader();
           reader.onload = function() {
             var base64 = arrayBufferToBase64(reader.result);
@@ -885,7 +891,6 @@
       dailyCall = window.Daily.createCallObject({
         audioSource: false,
         videoSource: false,
-        subscribeToTracks: true,
       });
 
       dailyCall.on('participant-updated', function(event) {

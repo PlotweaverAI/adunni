@@ -574,43 +574,49 @@ wss.on('connection', async (ws: WebSocket, req) => {
             const combined = Buffer.concat(audioBuffer);
             audioBuffer = [];
 
-            ws.send(JSON.stringify({ type: 'transcribing' }));
+            if (combined.length < 200) {
+              console.warn('[gateway] Audio too small (' + combined.length + ' bytes), skipping ASR');
+              ws.send(JSON.stringify({ type: 'error', message: 'Audio too short. Please hold the mic button longer.' }));
+            } else {
+              ws.send(JSON.stringify({ type: 'transcribing' }));
 
-            try {
-              const asrEngineResp = await fetch(`${ASR_SERVICE_URL}/transcribe`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  audio_base64: combined.toString('base64'),
-                  encoding: msg.encoding || 'webm',
-                  language: msg.language || null,
-                }),
-                signal: AbortSignal.timeout(120000), // 2 min timeout for model download + inference
-              });
+              try {
+                const asrEngineResp = await fetch(`${ASR_SERVICE_URL}/transcribe`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    audio_base64: combined.toString('base64'),
+                    encoding: msg.encoding || 'webm',
+                    language: msg.language || null,
+                  }),
+                  signal: AbortSignal.timeout(120000), // 2 min timeout for model download + inference
+                });
 
-              if (asrEngineResp.ok) {
-                const asrResult = await asrEngineResp.json() as { text: string; language: LanguageCode; confidence: number };
-                if (asrResult.text && asrResult.text.trim()) {
-                  await processUserUtteranceWithLanguage(
-                    asrResult.text,
-                    asrResult.language,
-                    asrResult.confidence,
-                    sessionId,
-                    clientId,
-                    config,
-                    ws,
-                    turnIndex,
-                    videoConversation
-                  );
-                  turnIndex += 2;
+                if (asrEngineResp.ok) {
+                  const asrResult = await asrEngineResp.json() as { text: string; language: LanguageCode; confidence: number };
+                  if (asrResult.text && asrResult.text.trim()) {
+                    await processUserUtteranceWithLanguage(
+                      asrResult.text,
+                      asrResult.language,
+                      asrResult.confidence,
+                      sessionId,
+                      clientId,
+                      config,
+                      ws,
+                      turnIndex,
+                      videoConversation
+                    );
+                    turnIndex += 2;
+                  }
+                } else {
+                  const asrErrorBody = await asrEngineResp.text();
+                  console.error('[gateway] ASR engine error:', asrEngineResp.status, asrErrorBody.substring(0, 300));
+                  ws.send(JSON.stringify({ type: 'error', message: 'Speech recognition failed' }));
                 }
-              } else {
-                console.error('[gateway] ASR engine error:', asrEngineResp.status);
-                ws.send(JSON.stringify({ type: 'error', message: 'Speech recognition failed' }));
+              } catch (asrErr) {
+                console.error('[gateway] ASR engine error:', asrErr);
+                ws.send(JSON.stringify({ type: 'error', message: 'Speech recognition unavailable' }));
               }
-            } catch (asrErr) {
-              console.error('[gateway] ASR engine error:', asrErr);
-              ws.send(JSON.stringify({ type: 'error', message: 'Speech recognition unavailable' }));
             }
           } else {
             audioBuffer = [];
