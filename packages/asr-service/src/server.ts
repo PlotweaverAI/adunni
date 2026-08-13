@@ -7,8 +7,8 @@ const SUPPORTED_LANGUAGES = (process.env.SUPPORTED_LANGUAGES ?? 'en-NG,pcm,yo,ig
 
 const asrService = new AsrServiceImpl();
 const app = express();
-app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
-app.use(express.json());
+app.use(express.raw({ type: 'application/octet-stream', limit: '25mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', provider: asrService.getProviderInfo() }));
 
@@ -42,6 +42,7 @@ app.post('/transcribe', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(120000),
     });
     const data = await resp.text();
     res.status(resp.status).type('json').send(data);

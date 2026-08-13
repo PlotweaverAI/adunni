@@ -46,13 +46,14 @@ DEVICE = "cuda" if _torch_cuda_available() else "cpu"
 
 # Model registry — mirrors the Plotweaver-AI-Models repo
 # Language code mapping: Adunni LanguageCode -> human language name -> HF model
+# Using whisper-tiny for speed on CPU (39M params vs 769M for medium)
 LANG_TO_MODEL = {
-    "en-NG": "openai/whisper-medium",
+    "en-NG": "openai/whisper-tiny",
     "yo":    "NCAIR1/Yoruba-ASR",
     "ha":    "NCAIR1/Hausa-ASR",
     "ig":    "NCAIR1/Igbo-ASR",
-    # Pidgin (pcm) has no dedicated model — use whisper-medium as fallback
-    "pcm":   "openai/whisper-medium",
+    # Pidgin (pcm) has no dedicated model — use whisper-tiny as fallback
+    "pcm":   "openai/whisper-tiny",
 }
 
 # Reverse map: human language name -> Adunni LanguageCode
