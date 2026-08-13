@@ -54,10 +54,129 @@ app.use(express.json({ limit: '5mb' }));
 
 const authMiddleware = createAuthMiddleware(JWT_SECRET);
 
-const server = createSecureServer(app, PORT, { certPath: TLS_CERT, keyPath: TLS_KEY, forceHttps: true });
+const server = createSecureServer(app, PORT, { certPath: TLS_CERT, keyPath: TLS_KEY, forceHttps: !!(TLS_CERT && TLS_KEY) });
 const wss = new WebSocketServer({ server, path: '/v1/sessions/:sessionId/stream' });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: '0.1.0' }));
+
+// ── POST /v1/auth/token — Issue a JWT token via API key ──
+app.post('/v1/auth/token', async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    if (!apiKey) return res.status(400).json({ error: 'apiKey is required' });
+
+    const keyHash = encryption.hashPii(apiKey);
+    const { rows } = await pool.query(
+      'SELECT client_id, role FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL',
+      [keyHash]
+    );
+    if (!rows[0]) return res.status(401).json({ error: 'Invalid or revoked API key' });
+
+    await pool.query('UPDATE api_keys SET last_used_at = NOW() WHERE key_hash = $1', [keyHash]);
+
+    const token = issueToken(
+      { clientId: rows[0]['client_id'], role: rows[0]['role'] },
+      JWT_SECRET,
+      '24h'
+    );
+    res.json({ token, clientId: rows[0]['client_id'], role: rows[0]['role'], expiresIn: '24h' });
+  } catch (err) {
+    console.error('[gateway] auth/token error:', err);
+    res.status(500).json({ error: 'Failed to issue token' });
+  }
+});
+
+// ── POST /v1/auth/keys — Generate a new API key (admin only) ──
+app.post('/v1/auth/keys', authMiddleware, requireRole('admin'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { clientId, role = 'client' } = req.body;
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' });
+
+    const plainKey = encryption.generateApiKey();
+    const keyHash = encryption.hashPii(plainKey);
+    const keyPrefix = plainKey.slice(0, 8);
+
+    await pool.query(
+      'INSERT INTO api_keys (client_id, key_hash, key_prefix, role, created_by) VALUES ($1, $2, $3, $4, $5)',
+      [clientId, keyHash, keyPrefix, role, req.auth!.clientId]
+    );
+    await auditLogger.logFromRequest(req, 'auth_failure', { action: 'api_key_created', clientId, role });
+
+    res.status(201).json({ apiKey: plainKey, keyPrefix, clientId, role });
+  } catch (err) {
+    console.error('[gateway] auth/keys error:', err);
+    res.status(500).json({ error: 'Failed to create API key' });
+  }
+});
+
+// ── GET /v1/sessions/:sessionId — Get session metadata ──
+app.get('/v1/sessions/:sessionId', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    const resp = await fetch(`${SESSION_STORE_URL}/sessions/${req.params.sessionId}`);
+    if (resp.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (!resp.ok) throw new Error(`session-store returned ${resp.status}`);
+    const session = await resp.json() as { clientId: string; [key: string]: unknown };
+
+    if (session.clientId !== req.auth!.clientId && req.auth!.role !== 'admin') {
+      return res.status(403).json({ error: 'Access denied: session belongs to another client' });
+    }
+    res.json(session);
+  } catch (err) {
+    console.error('[gateway] getSession error:', err);
+    res.status(500).json({ error: 'Failed to get session' });
+  }
+});
+
+// ── GET /v1/clients — List all clients ──
+app.get('/v1/clients', authMiddleware, requireRole('admin'), async (_req: AuthenticatedRequest, res) => {
+  try {
+    const resp = await fetch(`${CONFIG_SERVICE_URL}/clients`);
+    if (!resp.ok) throw new Error(`config-service returned ${resp.status}`);
+    res.json(await resp.json());
+  } catch (err) {
+    console.error('[gateway] listClients error:', err);
+    res.status(500).json({ error: 'Failed to list clients' });
+  }
+});
+
+// ── PATCH /v1/actions/:actionId — Update action status ──
+app.patch('/v1/actions/:actionId', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    const resp = await fetch(`${SESSION_STORE_URL}/actions/${req.params.actionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    if (!resp.ok) throw new Error(`session-store returned ${resp.status}`);
+    res.json(await resp.json());
+  } catch (err) {
+    console.error('[gateway] updateAction error:', err);
+    res.status(500).json({ error: 'Failed to update action' });
+  }
+});
+
+// ── POST /v1/sessions/:sessionId/actions/:actionId/confirm — Confirm or deny a pending action ──
+app.post('/v1/sessions/:sessionId/actions/:actionId/confirm', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { confirmed } = req.body;
+    const resp = await fetch(`${ACTION_EXECUTOR_URL}/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actionId: req.params.actionId, confirmed }),
+    });
+    if (!resp.ok) throw new Error(`action-executor returned ${resp.status}`);
+    const result = await resp.json();
+    await auditLogger.logFromRequest(req, 'action_confirm', {
+      sessionId: req.params.sessionId,
+      actionId: req.params.actionId,
+      confirmed,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[gateway] confirmAction error:', err);
+    res.status(500).json({ error: 'Failed to confirm action' });
+  }
+});
 
 // ── POST /v1/sessions — Start a new voice session ──
 app.post('/v1/sessions', authMiddleware, perClientRateLimit(50), async (req: AuthenticatedRequest, res) => {

@@ -1,6 +1,8 @@
 import { SessionStore } from '../src/session-store.js';
+import { EncryptionService } from '@adunni/security';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://adunni:adunni_dev_pass@localhost:5432/adunni';
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'dev_encryption_key_change_in_production';
 
 async function main() {
   const store = new SessionStore(DATABASE_URL);
@@ -115,6 +117,31 @@ async function main() {
   );
 
   console.log('[seed] Inserted/updated client: savanna-bank');
+
+  const enc = new EncryptionService(ENCRYPTION_KEY);
+  const adminKey = enc.generateApiKey();
+  const adminKeyHash = enc.hashPii(adminKey);
+  const clientKey = enc.generateApiKey();
+  const clientKeyHash = enc.hashPii(clientKey);
+
+  await pool.query(
+    `INSERT INTO api_keys (client_id, key_hash, key_prefix, role, created_by)
+     VALUES ($1, $2, $3, 'admin', 'seed')
+     ON CONFLICT (key_hash) DO NOTHING`,
+    ['savanna-bank', adminKeyHash, adminKey.slice(0, 8)]
+  );
+
+  await pool.query(
+    `INSERT INTO api_keys (client_id, key_hash, key_prefix, role, created_by)
+     VALUES ($1, $2, $3, 'client', 'seed')
+     ON CONFLICT (key_hash) DO NOTHING`,
+    ['savanna-bank', clientKeyHash, clientKey.slice(0, 8)]
+  );
+
+  console.log('[seed] Admin API key:', adminKey);
+  console.log('[seed] Client API key:', clientKey);
+  console.log('[seed] Use these keys with POST /v1/auth/token to get JWT tokens');
+
   await pool.end();
   await store.close();
 }

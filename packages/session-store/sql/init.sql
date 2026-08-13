@@ -80,15 +80,15 @@ CREATE INDEX idx_actions_status ON action_logs(status);
 -- ── Audit Trail ──
 CREATE TABLE IF NOT EXISTS audit_events (
   id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  session_id         UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  client_id          TEXT NOT NULL,
+  session_id         UUID REFERENCES sessions(id) ON DELETE CASCADE,
+  client_id          TEXT,
   event_type         TEXT NOT NULL,
   event_data         JSONB NOT NULL DEFAULT '{}',
-  timestamp          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_audit_session ON audit_events(session_id);
-CREATE INDEX idx_audit_client ON audit_events(client_id, timestamp DESC);
+CREATE INDEX idx_audit_client ON audit_events(client_id, created_at DESC);
 
 -- ── Webhook Subscriptions ──
 CREATE TABLE IF NOT EXISTS webhook_subscriptions (

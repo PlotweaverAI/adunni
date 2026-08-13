@@ -25,13 +25,14 @@ export class SessionStore implements SessionStoreService {
 
   async createSession(params: CreateSessionParams): Promise<Session> {
     const { rows } = await this.pool.query(
-      `INSERT INTO sessions (client_id, caller_id, caller_phone, preferred_language, metadata, phase)
-       VALUES ($1, $2, $3, $4, $5, 'connecting')
+      `INSERT INTO sessions (client_id, caller_id, caller_phone, caller_phone_hash, preferred_language, metadata, phase)
+       VALUES ($1, $2, $3, $4, $5, $6, 'connecting')
        RETURNING *`,
       [
         params.clientId,
         params.callerId,
         params.callerPhone ?? null,
+        params.callerPhoneHash ?? null,
         params.preferredLanguage ?? null,
         JSON.stringify(params.metadata ?? {}),
       ]

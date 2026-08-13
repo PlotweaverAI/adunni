@@ -66,14 +66,14 @@ export class NdprComplianceService {
     const deleted = await this.pool.query(
       `DELETE FROM transcript_turns
        WHERE session_id IN (
-         SELECT id FROM sessions WHERE client_id = $1 AND created_at < NOW() - INTERVAL '$2 days'
+         SELECT id FROM sessions WHERE client_id = $1 AND started_at < NOW() - make_interval(days => $2)
        )
        RETURNING id`,
       [clientId, retentionDays]
     );
 
     await this.pool.query(
-      `DELETE FROM sessions WHERE client_id = $1 AND created_at < NOW() - INTERVAL '$2 days'`,
+      `DELETE FROM sessions WHERE client_id = $1 AND started_at < NOW() - make_interval(days => $2)`,
       [clientId, retentionDays]
     );
 

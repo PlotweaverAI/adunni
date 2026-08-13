@@ -35,6 +35,7 @@ export interface CreateSessionParams {
   clientId: string;
   callerId: string;
   callerPhone?: string;
+  callerPhoneHash?: string;
   preferredLanguage?: LanguageCode;
   metadata?: Record<string, unknown>;
 }
