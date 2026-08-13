@@ -74,7 +74,7 @@ app.use(express.json({ limit: '5mb' }));
 const authMiddleware = createAuthMiddleware(JWT_SECRET);
 
 const server = createSecureServer(app, PORT, { certPath: TLS_CERT, keyPath: TLS_KEY, forceHttps: !!(TLS_CERT && TLS_KEY) });
-const wss = new WebSocketServer({ server, path: '/v1/sessions/:sessionId/stream' });
+const wss = new WebSocketServer({ server, path: /^\/v1\/sessions\/[^/]+\/stream$/ });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: '0.1.0' }));
 
