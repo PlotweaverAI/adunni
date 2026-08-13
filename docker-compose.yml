@@ -67,9 +67,25 @@ services:
       - PORT=3001
       - REDIS_URL=redis://redis:6379
       - SUPPORTED_LANGUAGES=en-NG,pcm,yo,ig,ha
+      - ASR_ENGINE_URL=http://asr-engine:3010
     depends_on:
       redis:
         condition: service_healthy
+      asr-engine:
+        condition: service_healthy
+    restart: unless-stopped
+
+  asr-engine:
+    build:
+      context: .
+      dockerfile: packages/asr-engine/Dockerfile
+    ports:
+      - "3010:3010"
+    environment:
+      - PORT=3010
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - asr-models:/models
     restart: unless-stopped
 
   tts-service:
@@ -170,3 +186,4 @@ services:
 
 volumes:
   pgdata:
+  asr-models:

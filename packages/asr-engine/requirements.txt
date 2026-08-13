@@ -1,0 +1,15 @@
+# ── ASR Engine — Python dependencies ──
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+
+# ASR models (from Plotweaver-AI-Models)
+transformers==4.46.3
+torch==2.5.1
+torchaudio==2.5.1
+stable-ts==2.16.0
+openai-whisper==20231117
+
+# Audio handling
+soundfile==0.12.1
+numpy==1.26.4

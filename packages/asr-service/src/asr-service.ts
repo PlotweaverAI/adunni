@@ -15,6 +15,7 @@ const LANGUAGE_KEYWORDS: Record<LanguageCode, string[]> = {
   'ha': ['Madalla', 'Za', 'ka', 'iya', 'ci', 'gaba', 'da', 'Hausa', 'Mahaifiyata', 'kawai', 'take', 'ji', 'Ī', 'mana', 'Zan', 'aika', 'mata', 'saƙon', 'tabbatarwa', 'karɓi', 'daga', 'Komai', 'shirye', 'yake', 'sai', 'amince'],
 };
 
+// ── Mock provider (keyword-based detection, used as fallback) ──
 export class MockAsrProvider implements AsrProvider {
   name = 'mock-asr';
   supportedLanguages: LanguageCode[] = ['en-NG', 'pcm', 'yo', 'ig', 'ha'];
@@ -97,11 +98,84 @@ export class MockAsrProvider implements AsrProvider {
   }
 }
 
+// ── Engine provider (proxies to the Python asr-engine service) ──
+export class EngineAsrProvider implements AsrProvider {
+  name = 'ncair1-whisper';
+  supportedLanguages: LanguageCode[] = ['en-NG', 'pcm', 'yo', 'ig', 'ha'];
+
+  constructor(private engineUrl: string) {}
+
+  createStream(options: AsrStreamOptions): AsrStream {
+    // For streaming audio, we buffer and send chunks to the engine's /transcribe endpoint
+    let closed = false;
+    let audioBuffer: Buffer[] = [];
+    const chunkCallbacks: Array<(chunk: AsrChunk) => void> = [];
+    const errorCallbacks: Array<(error: Error) => void> = [];
+    const closeCallbacks: Array<() => void> = [];
+
+    return {
+      onChunk: (cb) => chunkCallbacks.push(cb),
+      onError: (cb) => errorCallbacks.push(cb),
+      onClose: (cb) => closeCallbacks.push(cb),
+      sendAudio: (data: Buffer) => {
+        if (closed) return;
+        audioBuffer.push(data);
+      },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+
+        if (audioBuffer.length === 0) {
+          closeCallbacks.forEach((cb) => cb());
+          return;
+        }
+
+        try {
+          const combined = Buffer.concat(audioBuffer);
+          const audioBase64 = combined.toString('base64');
+
+          const resp = await fetch(`${this.engineUrl}/transcribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              audio_base64: audioBase64,
+              encoding: options.encoding === 'pcm16' ? 'wav' : options.encoding,
+              language: options.languages[0] ?? null,
+            }),
+          });
+
+          if (!resp.ok) {
+            throw new Error(`Engine transcribe failed: ${resp.status}`);
+          }
+
+          const result = await resp.json() as { text: string; language: LanguageCode; confidence: number };
+          chunkCallbacks.forEach((cb) => cb({
+            text: result.text,
+            isFinal: true,
+            language: result.language,
+            languageConfidence: result.confidence,
+            textConfidence: 0.95,
+            timestampMs: Date.now(),
+          }));
+        } catch (err) {
+          errorCallbacks.forEach((cb) => cb(err as Error));
+        }
+
+        closeCallbacks.forEach((cb) => cb());
+      },
+    };
+  }
+}
+
+// ── ASR Service implementation ──
 export class AsrServiceImpl implements AsrService {
   private provider: AsrProvider;
+  private engineUrl: string | null;
+  private engineAvailable: boolean | null = null;
 
   constructor(provider?: AsrProvider) {
-    this.provider = provider ?? new MockAsrProvider();
+    this.engineUrl = process.env.ASR_ENGINE_URL ?? null;
+    this.provider = provider ?? (this.engineUrl ? new EngineAsrProvider(this.engineUrl) : new MockAsrProvider());
   }
 
   createStream(options: AsrStreamOptions): AsrStream {
@@ -109,6 +183,26 @@ export class AsrServiceImpl implements AsrService {
   }
 
   async detectLanguage(text: string): Promise<{ language: LanguageCode; confidence: number }> {
+    // Try the Python engine first if configured
+    if (this.engineUrl) {
+      try {
+        const resp = await fetch(`${this.engineUrl}/detect-language`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (resp.ok) {
+          this.engineAvailable = true;
+          return await resp.json() as { language: LanguageCode; confidence: number };
+        }
+      } catch {
+        this.engineAvailable = false;
+        // Fall back to mock detection
+      }
+    }
+
+    // Fallback: use mock keyword-based detection
     if (this.provider instanceof MockAsrProvider) {
       return this.provider.detectLanguageFromText(text);
     }
@@ -116,9 +210,12 @@ export class AsrServiceImpl implements AsrService {
   }
 
   getProviderInfo() {
-    return {
+    const info = {
       name: this.provider.name,
       supportedLanguages: this.provider.supportedLanguages,
+      engine: this.engineUrl ?? 'none',
+      engineAvailable: this.engineAvailable,
     };
+    return info;
   }
 }

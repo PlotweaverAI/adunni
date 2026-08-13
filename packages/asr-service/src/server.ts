@@ -31,6 +31,27 @@ app.get('/info', (_req, res) => {
   });
 });
 
+// Proxy /transcribe to the Python ASR engine (if configured)
+app.post('/transcribe', async (req, res) => {
+  const engineUrl = process.env.ASR_ENGINE_URL;
+  if (!engineUrl) {
+    return res.status(501).json({ error: 'ASR engine not configured' });
+  }
+  try {
+    const resp = await fetch(`${engineUrl}/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    const data = await resp.text();
+    res.status(resp.status).type('json').send(data);
+  } catch (err) {
+    console.error('[asr] transcribe proxy error:', err);
+    res.status(502).json({ error: 'ASR engine unreachable' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[asr-service] listening on :${PORT}`);
+  console.log(`[asr-service] engine: ${process.env.ASR_ENGINE_URL ?? 'none (using mock)'}`);
 });
