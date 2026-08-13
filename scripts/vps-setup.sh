@@ -4,44 +4,46 @@ set -e
 echo "=== Adunni VPS Setup ==="
 
 # 1. Create project directory
-echo "[1/6] Creating project directory..."
+echo "[1/7] Creating project directory..."
 mkdir -p /root/adunni
 cd /root/adunni
 
-# 2. Install Docker if not present
+# 2. Install Docker via dnf (AlmaLinux/RHEL compatible)
 if ! command -v docker &> /dev/null; then
-  echo "[2/6] Installing Docker..."
-  curl -fsSL https://get.docker.com | sh
+  echo "[2/7] Installing Docker via dnf..."
+  dnf install -y dnf-plugins-core
+  dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   systemctl enable docker
   systemctl start docker
   echo "Docker installed."
 else
-  echo "[2/6] Docker already installed."
+  echo "[2/7] Docker already installed."
 fi
 
 # 3. Install Docker Compose plugin if not present
 if ! docker compose version &> /dev/null 2>&1; then
-  echo "[3/6] Installing Docker Compose plugin..."
+  echo "[3/7] Docker Compose plugin not found, installing standalone..."
   mkdir -p /usr/local/lib/docker/cli-plugins
   curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
     -o /usr/local/lib/docker/cli-plugins/docker-compose
   chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
   echo "Docker Compose installed."
 else
-  echo "[3/6] Docker Compose already installed."
+  echo "[3/7] Docker Compose already available."
 fi
 
 # 4. Clone the repo
-echo "[4/6] Cloning adunni repo..."
+echo "[4/7] Cloning adunni repo..."
 if [ -d ".git" ]; then
-  echo "Repo already exists, pulling latest..."
-  git pull origin main
+  echo "Repo exists, pulling latest..."
+  git pull origin main || true
 else
   git clone https://github.com/PlotweaverAI/adunni.git .
 fi
 
 # 5. Copy env file
-echo "[5/6] Creating .env file..."
+echo "[5/7] Creating .env file..."
 cat > /root/adunni/.env << 'ENVFILE'
 # Database
 POSTGRES_DB=adunni
@@ -76,13 +78,15 @@ ENVFILE
 echo ".env created. EDIT IT before going live!"
 
 # 6. Build and start
-echo "[6/6] Building and starting services..."
+echo "[6/7] Building and starting services..."
 docker compose build
 docker compose up -d
 
+# 7. Verify
+echo "[7/7] Checking service status..."
+sleep 5
+docker compose ps
+
 echo ""
 echo "=== Setup Complete ==="
-echo "Services starting up. Check status with:"
-echo "  cd /root/adunni && docker compose ps"
-echo ""
 echo "IMPORTANT: Edit /root/adunni/.env with secure passwords before production use!"
