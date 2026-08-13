@@ -32,6 +32,7 @@ const savannaBank = {
   clientName: 'Savanna Bank',
   allowedLanguages: ['en-NG', 'pcm', 'yo', 'ig', 'ha'],
   defaultLanguage: 'en-NG',
+  translationLanguage: 'en-NG',
   voicePersona: {
     name: 'Àdùnní',
     ttsVoiceId: 'adunni-yo-04',
@@ -81,7 +82,7 @@ const savannaBank = {
     },
   ],
   escalationRules: {
-    confidenceThreshold: 0.65,
+    confidenceThreshold: 0.3,
     maxRetries: 2,
     handoffMode: 'explicit_message',
     handoffMessage: 'Let me connect you to a human agent who can help further.',
@@ -103,12 +104,13 @@ async function main() {
   const pool = new Pool({ connectionString: DATABASE_URL });
 
   await pool.query(
-    `INSERT INTO clients (client_id, client_name, allowed_languages, default_language, voice_persona, intents, escalation_rules, branding, webhook_url, webhook_secret, ndpr_consent_msg, audio_retention_hrs, transcript_retention_days)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    `INSERT INTO clients (client_id, client_name, allowed_languages, default_language, translation_language, voice_persona, intents, escalation_rules, branding, webhook_url, webhook_secret, ndpr_consent_msg, audio_retention_hrs, transcript_retention_days)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      ON CONFLICT (client_id) DO UPDATE SET
        client_name = EXCLUDED.client_name,
        allowed_languages = EXCLUDED.allowed_languages,
        default_language = EXCLUDED.default_language,
+       translation_language = EXCLUDED.translation_language,
        voice_persona = EXCLUDED.voice_persona,
        intents = EXCLUDED.intents,
        escalation_rules = EXCLUDED.escalation_rules,
@@ -124,6 +126,7 @@ async function main() {
       savannaBank.clientName,
       savannaBank.allowedLanguages,
       savannaBank.defaultLanguage,
+      savannaBank.translationLanguage,
       JSON.stringify(savannaBank.voicePersona),
       JSON.stringify(savannaBank.intents),
       JSON.stringify(savannaBank.escalationRules),

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS clients (
   client_name        TEXT NOT NULL,
   allowed_languages  TEXT[] NOT NULL DEFAULT '{en-NG,pcm,yo,ig,ha}',
   default_language   TEXT NOT NULL DEFAULT 'en-NG',
+  translation_language TEXT DEFAULT 'en-NG',
   voice_persona      JSONB NOT NULL,
   intents            JSONB NOT NULL DEFAULT '[]',
   escalation_rules   JSONB NOT NULL,

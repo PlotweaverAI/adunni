@@ -84,6 +84,7 @@ function rowToConfig(row: Record<string, unknown>): ClientConfig {
     clientName: row['client_name'] as string,
     allowedLanguages: row['allowed_languages'] as LanguageCode[],
     defaultLanguage: row['default_language'] as LanguageCode,
+    translationLanguage: row['translation_language'] as LanguageCode | undefined,
     voicePersona: row['voice_persona'] as ClientConfig['voicePersona'],
     intents: row['intents'] as ClientConfig['intents'],
     escalationRules: row['escalation_rules'] as ClientConfig['escalationRules'],

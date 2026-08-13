@@ -702,6 +702,29 @@ async function processUserUtteranceWithLanguage(
 ) {
   const startTime = Date.now();
 
+  // ── Translation step: translate user utterance to config.translationLanguage ──
+  const targetLang = config?.translationLanguage ?? 'en-NG';
+  let translatedText = text;
+  let userTranslation = '';
+
+  if (language !== targetLang) {
+    try {
+      const translateResp = await fetch(`${ASR_SERVICE_URL}/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, source_language: language, target_language: targetLang }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (translateResp.ok) {
+        const translateResult = await translateResp.json() as { translated_text: string };
+        translatedText = translateResult.translated_text;
+        userTranslation = translatedText;
+      }
+    } catch (err) {
+      console.error('[gateway] translation error (user):', err);
+    }
+  }
+
   await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -719,7 +742,7 @@ async function processUserUtteranceWithLanguage(
 
   ws.send(JSON.stringify({
     type: 'transcript',
-    turn: { speaker: 'user', language, text, confidence: languageConfidence },
+    turn: { speaker: 'user', language, text, confidence: languageConfidence, englishTranslation: userTranslation || undefined },
   }));
 
   // Send user transcript to video face as echo (so face can react)
@@ -742,7 +765,7 @@ async function processUserUtteranceWithLanguage(
     clientId,
     config: config!,
     context,
-    userUtterance: text,
+    userUtterance: translatedText,
     detectedLanguage: language,
     languageConfidence,
   };
@@ -853,6 +876,27 @@ async function processUserUtteranceWithLanguage(
     ? decision.language
     : language;
 
+  // ── Translate AI response back to user's language if different ──
+  let aiTextTranslated = aiText;
+  let aiTranslation = '';
+  if (language !== targetLang && aiText) {
+    try {
+      const aiTranslateResp = await fetch(`${ASR_SERVICE_URL}/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: aiText, source_language: targetLang, target_language: language }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (aiTranslateResp.ok) {
+        const aiTranslateResult = await aiTranslateResp.json() as { translated_text: string };
+        aiTextTranslated = aiTranslateResult.translated_text;
+        aiTranslation = aiTextTranslated;
+      }
+    } catch (err) {
+      console.error('[gateway] translation error (AI):', err);
+    }
+  }
+
   await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -861,7 +905,7 @@ async function processUserUtteranceWithLanguage(
       turnIndex: currentTurnIndex + 1,
       speaker: 'ai',
       language: aiLanguage,
-      text: aiText,
+      text: aiTextTranslated,
       status: 'complete',
       confidence: orchResult.confidence,
       latencyMs: Date.now() - startTime,
@@ -871,13 +915,13 @@ async function processUserUtteranceWithLanguage(
 
   ws.send(JSON.stringify({
     type: 'transcript',
-    turn: { speaker: 'ai', language: aiLanguage, text: aiText, confidence: orchResult.confidence },
+    turn: { speaker: 'ai', language: aiLanguage, text: aiTextTranslated, confidence: orchResult.confidence, englishTranslation: language !== targetLang ? aiText : undefined },
   }));
 
   // Send AI response to video face as echo — face will speak with lip-sync
   if (videoConversation && tavus) {
     try {
-      await tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiText, {
+      await tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiTextTranslated, {
         inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
         done: true,
       });
@@ -892,7 +936,7 @@ async function processUserUtteranceWithLanguage(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: aiText,
+          text: aiTextTranslated,
           language: aiLanguage,
           voicePersona: config.voicePersona,
           sessionId,

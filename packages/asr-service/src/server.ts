@@ -52,6 +52,26 @@ app.post('/transcribe', async (req, res) => {
   }
 });
 
+app.post('/translate', async (req, res) => {
+  const engineUrl = process.env.ASR_ENGINE_URL;
+  if (!engineUrl) {
+    return res.status(501).json({ error: 'ASR engine not configured' });
+  }
+  try {
+    const resp = await fetch(`${engineUrl}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(60000),
+    });
+    const data = await resp.text();
+    res.status(resp.status).type('json').send(data);
+  } catch (err) {
+    console.error('[asr] translate proxy error:', err);
+    res.status(502).json({ error: 'ASR engine unreachable' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[asr-service] listening on :${PORT}`);
   console.log(`[asr-service] engine: ${process.env.ASR_ENGINE_URL ?? 'none (using mock)'}`);

@@ -5,6 +5,7 @@ export interface ClientConfig {
   clientName: string;
   allowedLanguages: LanguageCode[];
   defaultLanguage: LanguageCode;
+  translationLanguage?: LanguageCode;
   voicePersona: VoicePersona;
   intents: IntentConfig[];
   escalationRules: EscalationRules;

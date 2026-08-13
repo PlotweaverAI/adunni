@@ -202,6 +202,83 @@ class TranscribeRequest(BaseModel):
     encoding: Optional[str] = "wav"
 
 
+# ── Translation models (Helsinki-NLP opus-mt) ──
+# Maps (source_lang, target_lang) -> HuggingFace model ID
+TRANSLATION_MODELS = {
+    ("yo", "en-NG"): "Helsinki-NLP/opus-mt-yo-en",
+    ("ha", "en-NG"): "Helsinki-NLP/opus-mt-ha-en",
+    ("ig", "en-NG"): "Helsinki-NLP/opus-mt-ig-en",
+    ("pcm", "en-NG"): "Helsinki-NLP/opus-mt-pcm-en",
+    ("en-NG", "yo"): "Helsinki-NLP/opus-mt-en-yo",
+    ("en-NG", "ha"): "Helsinki-NLP/opus-mt-en-ha",
+    ("en-NG", "ig"): "Helsinki-NLP/opus-mt-en-ig",
+}
+
+_loaded_translators = {}
+
+
+def _load_translator(model_id: str):
+    """Load a translation pipeline (cached)."""
+    if model_id not in _loaded_translators:
+        from transformers import pipeline as hf_pipeline
+        log.info(f"Loading translation model: {model_id} (device={DEVICE})")
+        _loaded_translators[model_id] = hf_pipeline(
+            "translation",
+            model=model_id,
+            device=0 if DEVICE == "cuda" else -1,
+        )
+    return _loaded_translators[model_id]
+
+
+def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
+    """
+    Translate text from source_lang to target_lang using Helsinki-NLP opus-mt models.
+
+    Returns:
+        { translated_text, source_language, target_language, model }
+    """
+    # No translation needed if same language
+    if source_lang == target_lang:
+        return {
+            "translated_text": text,
+            "source_language": source_lang,
+            "target_language": target_lang,
+            "model": "none",
+        }
+
+    # Normalize language codes (en-NG -> en for model lookup)
+    src_norm = source_lang if source_lang in ("yo", "ha", "ig", "pcm") else "en-NG"
+    tgt_norm = target_lang if target_lang in ("yo", "ha", "ig", "pcm") else "en-NG"
+
+    model_key = (src_norm, tgt_norm)
+    if model_key not in TRANSLATION_MODELS:
+        # Try reverse direction or fallback to English
+        raise HTTPException(
+            status_code=400,
+            detail=f"Translation from {source_lang} to {target_lang} not supported. "
+                   f"Supported pairs: {list(TRANSLATION_MODELS.keys())}"
+        )
+
+    model_id = TRANSLATION_MODELS[model_key]
+    translator = _load_translator(model_id)
+
+    result = translator(text, max_length=512)
+    translated = result[0]["translation_text"].strip() if result else text
+
+    return {
+        "translated_text": translated,
+        "source_language": source_lang,
+        "target_language": target_lang,
+        "model": model_id,
+    }
+
+
+class TranslateRequest(BaseModel):
+    text: str
+    source_language: str
+    target_language: str
+
+
 @app.get("/health")
 async def health():
     return {
@@ -233,6 +310,16 @@ async def detect_language(req: DetectRequest):
     if not req.text:
         raise HTTPException(status_code=400, detail="text is required")
     result = detect_language_from_text(req.text)
+    return result
+
+
+@app.post("/translate")
+async def translate(req: TranslateRequest):
+    if not req.text:
+        raise HTTPException(status_code=400, detail="text is required")
+    if not req.source_language or not req.target_language:
+        raise HTTPException(status_code=400, detail="source_language and target_language are required")
+    result = translate_text(req.text, req.source_language, req.target_language)
     return result
 
 

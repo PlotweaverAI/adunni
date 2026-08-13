@@ -38,6 +38,15 @@ RUN mkdir -p /models
 # Pre-download whisper-tiny model so first transcription is fast
 RUN python -c "import stable_whisper; stable_whisper.load_model('tiny', device='cpu')" 2>/dev/null || true
 
+# Pre-download translation models (Helsinki-NLP opus-mt) for African languages
+RUN python -c "from transformers import pipeline; \
+  pipeline('translation', model='Helsinki-NLP/opus-mt-yo-en'); \
+  pipeline('translation', model='Helsinki-NLP/opus-mt-ha-en'); \
+  pipeline('translation', model='Helsinki-NLP/opus-mt-ig-en'); \
+  pipeline('translation', model='Helsinki-NLP/opus-mt-en-yo'); \
+  pipeline('translation', model='Helsinki-NLP/opus-mt-en-ha'); \
+  pipeline('translation', model='Helsinki-NLP/opus-mt-en-ig')" 2>/dev/null || true
+
 EXPOSE 3010
 
 # Health check
