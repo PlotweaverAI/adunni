@@ -1,0 +1,6 @@
+{
+  "buildCommand": "echo \"No build step required for static frontend\"",
+  "outputDirectory": ".",
+  "installCommand": "echo \"No dependencies to install\"",
+  "cleanUrls": true
+}
