@@ -1,0 +1,39 @@
+{
+  "name": "adunni",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Àdùnní — Multilingual AI Voice Agent for African languages",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "docker compose up --build",
+    "dev:local": "concurrently -n gateway,asr,tts,orch,action,config,session \"npm:dev:gateway\" \"npm:dev:asr\" \"npm:dev:tts\" \"npm:dev:orchestrator\" \"npm:dev:action-executor\" \"npm:dev:config-service\" \"npm:dev:session-store\"",
+    "dev:gateway": "npm run dev -w @adunni/api-gateway",
+    "dev:asr": "npm run dev -w @adunni/asr-service",
+    "dev:tts": "npm run dev -w @adunni/tts-service",
+    "dev:orchestrator": "npm run dev -w @adunni/orchestrator",
+    "dev:action-executor": "npm run dev -w @adunni/action-executor",
+    "dev:config-service": "npm run dev -w @adunni/config-service",
+    "dev:session-store": "npm run dev -w @adunni/session-store",
+    "db:migrate": "node packages/session-store/scripts/migrate.js",
+    "db:seed": "node packages/session-store/scripts/seed.js",
+    "test": "jest --config packages/integration-tests/jest.config.js",
+    "lint": "eslint packages/**/*.ts",
+    "clean": "rimraf packages/*/dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/jest": "^29.5.12",
+    "concurrently": "^8.2.2",
+    "jest": "^29.7.0",
+    "rimraf": "^5.0.5",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

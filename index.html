@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Àdùnní — AI Human Demo | PlotWeaver</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #07090B; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; color: #F4F6F8; overflow: hidden; }
+
+  @keyframes wf { 0%, 100% { transform: scaleY(0.25); } 50% { transform: scaleY(1); } }
+  @keyframes ringPulse { 0% { box-shadow: 0 0 0 0 rgba(47,212,196,0.45); } 100% { box-shadow: 0 0 0 26px rgba(47,212,196,0); } }
+  @keyframes micPulse { 0% { box-shadow: 0 0 0 0 rgba(228,87,60,0.5); } 100% { box-shadow: 0 0 0 18px rgba(228,87,60,0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .app { display: flex; flex-direction: column; height: 100vh; background: #07090B; color: #F4F6F8; overflow: hidden; }
+
+  /* ── Top bar ── */
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 14px 22px; border-bottom: 1px solid rgba(255,255,255,0.08); flex-shrink: 0; }
+  .brand-mark { width: 32px; height: 32px; border-radius: 9px; background: linear-gradient(135deg, #2FD4C4, #189C90); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .brand-name { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; line-height: 1.1; }
+  .brand-tag { font-family: 'JetBrains Mono', monospace; font-size: 8.5px; letter-spacing: 0.12em; color: #8A9499; margin-top: 2px; }
+  .live-pill { display: flex; align-items: center; gap: 7px; margin-left: 18px; background: rgba(228,87,60,0.14); border: 1px solid rgba(228,87,60,0.4); border-radius: 999px; padding: 5px 13px; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #E4573C; }
+  .live-text { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.1em; font-weight: 700; color: #FF8A70; }
+  .telemetry { margin-left: auto; display: flex; align-items: center; gap: 18px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #8A9499; }
+  .telemetry b { color: #C7CDD1; font-weight: 600; }
+  .telemetry .teal b { color: #2FD4C4; }
+
+  /* ── Main layout ── */
+  .main { display: flex; flex: 1; min-height: 0; }
+
+  /* ── Left panel (main stage) ── */
+  .stage { flex: 1.15; min-width: 0; display: flex; flex-direction: column; position: relative; background: radial-gradient(ellipse at 50% 35%, #10181B 0%, #07090B 70%); }
+  .stage-center { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: 18px; padding: 26px; }
+
+  .avatar-wrap { position: relative; width: min(240px, 30vh); height: min(240px, 30vh); flex-shrink: 0; }
+  .avatar-ring-pulse { position: absolute; inset: -8px; border-radius: 50%; border: 2px solid #2FD4C4; animation: ringPulse 1.4s ease-out infinite; }
+  .avatar-ring-static { position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(47,212,196,0.35); padding: 6px; box-sizing: border-box; }
+  .avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; background: #0E1417; display: block; }
+
+  .name-row { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .name { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
+  .speaking-badge { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.1em; font-weight: 700; color: #08201D; background: #2FD4C4; padding: 4px 9px; border-radius: 999px; }
+  .subtitle { font-size: 14px; color: #96A0A5; margin-top: 3px; text-align: center; }
+
+  .lang-chips { display: flex; gap: 7px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+  .lang-chip { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.06em; font-weight: 700; padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14); color: #8A9499; background: transparent; transition: all 0.3s ease; }
+  .lang-chip.active { border-color: #2FD4C4; color: #08201D; background: #2FD4C4; }
+
+  .waveform { display: flex; align-items: flex-end; gap: 4px; height: 34px; }
+  .wf-bar { width: 5px; border-radius: 3px; }
+  .wf-bar.active { height: 100%; background: #2FD4C4; animation: wf 0.7s ease-in-out infinite; }
+  .wf-bar.idle { height: 8px; background: #26333A; }
+
+  /* ── Caption bar ── */
+  .caption-bar { margin: 0 214px 14px 26px; background: rgba(11,16,19,0.85); border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; padding: 16px 20px; backdrop-filter: blur(6px); }
+  .caption-header { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
+  .caption-label { font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; font-weight: 700; }
+  .caption-langs { font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E787D; }
+  .caption-text { font-size: 19px; line-height: 1.45; font-weight: 500; min-height: 28px; }
+  .caption-cursor { color: #2FD4C4; }
+
+  /* ── Idle overlay ── */
+  .idle-overlay { position: absolute; inset: 0; background: rgba(7,9,11,0.88); display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px); z-index: 10; }
+  .idle-content { text-align: center; max-width: 420px; padding: 20px; }
+  .idle-title { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .idle-desc { color: #96A0A5; font-size: 15px; line-height: 1.55; margin: 0 0 22px; }
+  .start-btn { border: none; background: #2FD4C4; color: #08201D; font-family: 'JetBrains Mono', monospace; font-size: 13px; letter-spacing: 0.06em; font-weight: 700; padding: 15px 30px; border-radius: 11px; cursor: pointer; transition: background 0.2s; }
+  .start-btn:hover { background: #3FE2D2; }
+
+  /* ── User video tile ── */
+  .user-tile { position: absolute; right: 22px; bottom: 104px; width: 172px; z-index: 5; }
+  .user-tile-inner { position: relative; height: 124px; border-radius: 14px; overflow: hidden; border: 2px solid rgba(255,255,255,0.15); background: #10181B; box-shadow: 0 12px 30px -12px rgba(0,0,0,0.7); transition: border-color 0.3s; }
+  .user-tile-inner.speaking { border-color: #E4573C; }
+  .user-tile-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .user-tile-overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 7px; background: linear-gradient(transparent, rgba(7,9,11,0.85)); display: flex; align-items: center; gap: 6px; pointer-events: none; }
+  .user-tile-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.1em; font-weight: 700; color: #C7CDD1; }
+  .user-tile-label.speaking { color: #FF8A70; }
+  .user-tile-wf { display: flex; align-items: flex-end; gap: 2px; height: 10px; margin-left: auto; }
+  .user-tile-wf span { width: 3px; height: 100%; border-radius: 2px; background: #FF8A70; animation: wf 0.7s ease-in-out infinite; }
+
+  /* ── Bottom controls ── */
+  .controls { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 16px 26px 22px; flex-shrink: 0; }
+  .mic-btn-active { width: 52px; height: 52px; border-radius: 50%; background: #E4573C; display: flex; align-items: center; justify-content: center; animation: micPulse 1.2s ease-out infinite; }
+  .mic-btn-idle { width: 52px; height: 52px; border-radius: 50%; background: #141A1E; border: 1px solid rgba(255,255,255,0.13); display: flex; align-items: center; justify-content: center; }
+  .replay-btn { border: 1px solid #2FD4C4; background: transparent; color: #2FD4C4; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; letter-spacing: 0.06em; font-weight: 700; padding: 14px 22px; border-radius: 11px; cursor: pointer; transition: background 0.2s; }
+  .replay-btn:hover { background: rgba(47,212,196,0.1); }
+  .end-call-btn { width: 52px; height: 52px; border-radius: 50%; background: rgba(228,87,60,0.13); border: 1px solid rgba(228,87,60,0.4); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.2s; }
+  .end-call-btn:hover { background: rgba(228,87,60,0.25); }
+
+  /* ── Right panel (transcript) ── */
+  .transcript-panel { width: 430px; flex-shrink: 0; border-left: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; background: #0B1013; }
+  .transcript-header { display: flex; align-items: center; gap: 10px; padding: 15px 18px; border-bottom: 1px solid rgba(255,255,255,0.08); flex-shrink: 0; }
+  .transcript-title { font-size: 14px; font-weight: 700; }
+  .auto-lang-badge { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.1em; font-weight: 700; color: #2FD4C4; background: rgba(47,212,196,0.12); border: 1px solid rgba(47,212,196,0.3); padding: 4px 9px; border-radius: 999px; }
+  .transcript-list { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+  .turn { display: flex; flex-direction: column; }
+  .turn.ai { align-items: flex-start; }
+  .turn.user { align-items: flex-end; }
+  .turn-meta { display: flex; gap: 6px; margin-bottom: 5px; align-items: center; }
+  .turn-name { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.08em; font-weight: 700; }
+  .turn-lang { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #6E787D; }
+  .turn-bubble { max-width: 88%; padding: 11px 14px; font-size: 14px; line-height: 1.5; }
+  .turn.ai .turn-bubble { background: rgba(47,212,196,0.08); border: 1px solid rgba(47,212,196,0.25); border-radius: 3px 13px 13px 13px; }
+  .turn.user .turn-bubble { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 13px 3px 13px 13px; }
+  .turn-trans { max-width: 88%; font-size: 12px; color: #7C878C; font-style: italic; margin-top: 5px; line-height: 1.45; }
+  .transcript-empty { color: #5B6469; font-size: 13px; text-align: center; margin-top: 32px; }
+  .transcript-footer { border-top: 1px solid rgba(255,255,255,0.08); padding: 13px 18px; flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E787D; }
+  .transcript-footer b { color: #C7CDD1; font-weight: 600; }
+
+  /* ── Speed control ── */
+  .speed-control { display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A9499; }
+  .speed-control input[type="range"] { width: 80px; accent-color: #2FD4C4; cursor: pointer; }
+  .speed-val { color: #2FD4C4; font-weight: 700; min-width: 32px; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+  /* ── Avatar SVG placeholder ── */
+  .avatar-placeholder { width: 100%; height: 100%; border-radius: 50%; background: #0E1417; display: flex; align-items: center; justify-content: center; }
+  .avatar-placeholder svg { width: 60%; height: 60%; opacity: 0.5; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ── Top bar ── -->
+  <div class="topbar">
+    <div class="brand-mark">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 12h3l2-7 4 14 2-7h5" stroke="#08201D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div>
+      <div class="brand-name">PlotWeaver</div>
+      <div class="brand-tag">AI HUMANS THAT SPEAK AFRICA</div>
+    </div>
+    <div class="live-pill">
+      <span class="live-dot"></span>
+      <span class="live-text">LIVE DEMO</span>
+    </div>
+    <div class="telemetry">
+      <span>SESSION <b>bank-yo-004</b></span>
+      <span class="teal">TTFA <b id="ttfa-val">240 ms</b></span>
+      <span class="teal">LATENCY <b>&lt;1s E2E</b></span>
+      <div class="speed-control">
+        <span>SPEED</span>
+        <input type="range" id="speed-slider" min="0.5" max="2.5" step="0.25" value="0.75">
+        <span class="speed-val" id="speed-val">0.75×</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Main layout ── -->
+  <div class="main">
+
+    <!-- ── Left panel (main stage) ── -->
+    <div class="stage" id="stage">
+      <div class="stage-center">
+        <div class="avatar-wrap" id="avatar-wrap">
+          <div class="avatar-ring-static">
+            <div class="avatar-placeholder" id="avatar-placeholder">
+              <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="60" cy="45" r="22" fill="none" stroke="#2FD4C4" stroke-width="3" opacity="0.4"/>
+                <path d="M28 100 Q60 70 92 100" fill="none" stroke="#2FD4C4" stroke-width="3" opacity="0.4" stroke-linecap="round"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div style="text-align:center;">
+          <div class="name-row">
+            <div class="name">Àdùnní</div>
+            <span class="speaking-badge" id="speaking-badge" style="display:none;">SPEAKING</span>
+          </div>
+          <div class="subtitle">AI Banking Agent · Savanna Bank demo</div>
+          <div class="lang-chips" id="lang-chips"></div>
+        </div>
+        <div class="waveform" id="waveform"></div>
+      </div>
+
+      <!-- Caption bar -->
+      <div class="caption-bar" id="caption-bar" style="display:none;">
+        <div class="caption-header">
+          <span class="caption-label" id="caption-label"></span>
+          <span class="caption-langs" id="caption-langs"></span>
+        </div>
+        <div class="caption-text" id="caption-text"></div>
+      </div>
+
+      <!-- Idle / start overlay -->
+      <div class="idle-overlay" id="idle-overlay">
+        <div class="idle-content">
+          <div class="idle-title">Meet Àdùnní</div>
+          <p class="idle-desc">An AI human powered by PlotWeaver voices. She speaks Nigerian English, Pidgin, Yorùbá, Igbo and Hausa, and code-switches mid-conversation.</p>
+          <button class="start-btn" id="start-btn">▶ START DEMO CALL</button>
+        </div>
+      </div>
+
+      <!-- User video tile -->
+      <div class="user-tile" id="user-tile" style="display:none;">
+        <div class="user-tile-inner" id="user-tile-inner">
+          <div class="avatar-placeholder" style="border-radius:0;">
+            <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" style="width:50%;height:50%;opacity:0.3;">
+              <circle cx="60" cy="45" r="20" fill="none" stroke="#FF8A70" stroke-width="3"/>
+              <path d="M30 100 Q60 72 90 100" fill="none" stroke="#FF8A70" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="user-tile-overlay">
+            <span class="user-tile-label" id="user-tile-label">WOLE</span>
+            <div class="user-tile-wf" id="user-tile-wf" style="display:none;">
+              <span style="animation-delay:0s;"></span>
+              <span style="animation-delay:0.15s;"></span>
+              <span style="animation-delay:0.3s;"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom controls -->
+      <div class="controls" id="controls">
+        <div class="mic-btn-idle" id="mic-btn-idle">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C7CDD1" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg>
+        </div>
+        <div class="mic-btn-active" id="mic-btn-active" style="display:none;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg>
+        </div>
+        <button class="replay-btn" id="replay-btn" style="display:none;">↻ REPLAY DEMO</button>
+        <div class="end-call-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF8A70" stroke-width="2"><path d="M4 12c5-5 11-5 16 0l-2.5 2.5c-1-1-2-1.6-3.5-2v3l-4 0v-3c-1.5 0.4-2.5 1-3.5 2z"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Right panel (transcript) ── -->
+    <div class="transcript-panel">
+      <div class="transcript-header">
+        <span class="transcript-title">Live transcript</span>
+        <span class="auto-lang-badge">AUTO LANGUAGE DETECT</span>
+      </div>
+      <div class="transcript-list" id="transcript-list">
+        <div class="transcript-empty" id="transcript-empty">Transcript appears here once the call starts.</div>
+      </div>
+      <div class="transcript-footer">
+        <span>ASR <b>STORM-OS</b></span>
+        <span>TTS <b>Àdùnní-YO-04</b></span>
+        <span>FACE <b>REAL-TIME RENDER</b></span>
+        <span>TURNS <b>ADAPTIVE</b></span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── Conversation script (9 turns) ──
+  var SCRIPT = [
+    {
+      who: 'ai',
+      langs: ['Yorùbá', 'English (NG)'],
+      text: "Ẹ káàbọ̀! Good afternoon. I'm Àdùnní, your Savanna Bank assistant. A lè sọ̀rọ̀ ní èdè Yorùbá, Igbo, Hausa, Pidgin, anything you like. How can I help today?",
+      trans: "Welcome! We can speak in Yorùbá, Igbo, Hausa or Pidgin, whatever you prefer."
+    },
+    {
+      who: 'user',
+      langs: ['Pidgin'],
+      text: "Abeg Àdùnní, I wan send ₦50,000 give my mama for Ibadan, but the app dey show me one error since morning.",
+      trans: "Please, I want to send ₦50,000 to my mother in Ibadan, but the app has been showing an error since this morning."
+    },
+    {
+      who: 'ai',
+      langs: ['Pidgin', 'English (NG)'],
+      text: "No wahala, Wole. I don see the transfer for your account. E pause because na ₦20,000 remain for your daily limit. Make I raise the limit for you one-time?",
+      trans: "No problem. I can see the transfer. It paused because only ₦20,000 remains of your daily limit. Shall I raise it for this transaction?"
+    },
+    {
+      who: 'user',
+      langs: ['Yorùbá'],
+      text: "Ṣé owó náà ti kúrò nínú àkántì mi?",
+      trans: "Has the money already left my account?"
+    },
+    {
+      who: 'ai',
+      langs: ['Yorùbá'],
+      text: "Rárã o. Owó yín kò tíì kúrò, ó ṣì wà nínú àkántì yín pátápátá. Tí ẹ bá fọwọ́ sí i, màá fi ránṣẹ́ léṣẹ̀kẹṣẹ̀.",
+      trans: "Not at all. Your money hasn't left, it is still fully in your account. Once you approve, I'll send it immediately."
+    },
+    {
+      who: 'user',
+      langs: ['Hausa'],
+      text: "Madalla! Za ka iya ci gaba da Hausa? Mahaifiyata Hausa kawai take ji.",
+      trans: "Great! Can you continue in Hausa? My mother only understands Hausa."
+    },
+    {
+      who: 'ai',
+      langs: ['Hausa'],
+      text: "Ī, mana! Zan aika mata saƙon tabbatarwa da Hausa: 'An karɓi ₦50,000 daga Wole.' Komai a shirye yake, sai ka amince.",
+      trans: "Yes, of course! I'll send her the confirmation in Hausa: '₦50,000 received from Wole.' Everything is ready, just approve."
+    },
+    {
+      who: 'user',
+      langs: ['Igbo'],
+      text: "Daalụ nke ukwuu! Ị na-asụkwa Igbo?",
+      trans: "Thank you so much! Do you also speak Igbo?"
+    },
+    {
+      who: 'ai',
+      langs: ['Igbo', 'English (NG)'],
+      text: "Ee, a na m asụ Igbo nke ọma! Transfer done. Ego ahụ eruola. Anything else I can help with today, Wole?",
+      trans: "Yes, I speak Igbo well! The transfer is done. The money has arrived."
+    }
+  ];
+
+  var ALL_LANGS = ['English (NG)', 'Pidgin', 'Yorùbá', 'Igbo', 'Hausa'];
+
+  // ── State ──
+  var demoStartAt = 0;
+  var demoSpeed = 0.75;
+  var rafId = null;
+  var intervalId = null;
+  var driverAlive = false;
+  var lastFrameKey = '';
+
+  // ── DOM refs ──
+  var el = {};
+  function cacheDOM() {
+    var ids = ['app','stage','avatar-wrap','speaking-badge','lang-chips','waveform',
+      'caption-bar','caption-label','caption-langs','caption-text',
+      'idle-overlay','start-btn','user-tile','user-tile-inner','user-tile-label',
+      'user-tile-wf','mic-btn-idle','mic-btn-active','replay-btn','controls',
+      'transcript-list','transcript-empty','ttfa-val','speed-slider','speed-val',
+      'avatar-placeholder'];
+    for (var i = 0; i < ids.length; i++) {
+      var parts = ids[i].split('-');
+      var key = parts.map(function(p, idx) {
+        return idx === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1);
+      }).join('');
+      el[key] = document.getElementById(ids[i]);
+    }
+  }
+
+  // ── Wall-clock frame computation ──
+  function computeFrame() {
+    if (!demoStartAt) return { phase: 'idle', idx: 0, chars: 0, ttfa: 240 };
+    var sp = demoSpeed;
+    var CPS = 55 * sp;
+    var PAUSE = 1300 / sp;
+    var rem = Date.now() - demoStartAt;
+
+    for (var i = 0; i < SCRIPT.length; i++) {
+      var len = SCRIPT[i].text.length;
+      var typeMs = len / CPS * 1000;
+      var ttfa = 200 + (i * 37) % 90;
+
+      if (rem < typeMs) {
+        return { phase: 'playing', idx: i, chars: Math.max(0, Math.floor(rem / 1000 * CPS)), ttfa: ttfa };
+      }
+      rem -= typeMs;
+
+      if (i === SCRIPT.length - 1) break;
+
+      if (rem < PAUSE) {
+        return { phase: 'playing', idx: i, chars: len, ttfa: ttfa };
+      }
+      rem -= PAUSE;
+    }
+
+    var last = SCRIPT[SCRIPT.length - 1];
+    return { phase: 'done', idx: SCRIPT.length - 1, chars: last.text.length, ttfa: 240 };
+  }
+
+  // ── Render: language chips ──
+  function renderLangChips(activeLangs) {
+    var html = '';
+    for (var i = 0; i < ALL_LANGS.length; i++) {
+      var name = ALL_LANGS[i];
+      var on = activeLangs.indexOf(name) >= 0;
+      html += '<span class="lang-chip' + (on ? ' active' : '') + '">' + esc(name) + '</span>';
+    }
+    el.langChips.innerHTML = html;
+  }
+
+  // ── Render: waveform ──
+  function renderWaveform(speaking, isAi) {
+    var bars = '';
+    var delays = [0, 0.12, 0.24, 0.36, 0.48, 0.2, 0.32];
+    for (var i = 0; i < 7; i++) {
+      if (speaking && isAi) {
+        bars += '<div class="wf-bar active" style="animation-delay:' + delays[i] + 's;"></div>';
+      } else {
+        bars += '<div class="wf-bar idle"></div>';
+      }
+    }
+    el.waveform.innerHTML = bars;
+  }
+
+  // ── Render: transcript ──
+  function renderTranscript(f) {
+    var playing = f.phase === 'playing';
+    var count = f.phase === 'idle' ? 0 : (playing ? f.idx + 1 : SCRIPT.length);
+
+    if (count === 0) {
+      el.transcriptEmpty.style.display = 'block';
+      el.transcriptList.innerHTML = '';
+      el.transcriptList.appendChild(el.transcriptEmpty);
+      return;
+    }
+
+    el.transcriptEmpty.style.display = 'none';
+    var html = '';
+    for (var i = 0; i < count; i++) {
+      var t = SCRIPT[i];
+      var isActive = playing && i === f.idx;
+      var ai = t.who === 'ai';
+      var typed = isActive ? t.text.slice(0, f.chars) : t.text;
+      var showTrans = !!t.trans && (!isActive || f.chars >= t.text.length);
+
+      html += '<div class="turn ' + (ai ? 'ai' : 'user') + '">';
+      html += '<div class="turn-meta">';
+      html += '<span class="turn-name" style="color:' + (ai ? '#2FD4C4' : '#FFB098') + ';">' + (ai ? 'ÀDÙNNÍ' : 'WOLE') + '</span>';
+      html += '<span class="turn-lang">' + esc(t.langs.join(' + ')) + '</span>';
+      html += '</div>';
+      html += '<div class="turn-bubble">' + esc(typed) + (isActive ? '<span class="caption-cursor">▎</span>' : '') + '</div>';
+      if (showTrans) {
+        html += '<div class="turn-trans">' + esc(t.trans) + '</div>';
+      }
+      html += '</div>';
+    }
+    el.transcriptList.innerHTML = html;
+
+    // Auto-scroll to bottom
+    el.transcriptList.scrollTop = el.transcriptList.scrollHeight;
+  }
+
+  // ── Main render ──
+  function render() {
+    var f = computeFrame();
+    var playing = f.phase === 'playing';
+    var done = f.phase === 'done';
+    var idle = f.phase === 'idle';
+    var active = playing ? SCRIPT[f.idx] : null;
+    var typed = active ? active.text.slice(0, f.chars) : '';
+
+    var aiSpeaking = !!active && active.who === 'ai' && f.chars < active.text.length;
+    var userSpeaking = !!active && active.who === 'user' && f.chars < active.text.length;
+    var activeLangs = active ? active.langs : [];
+
+    // TTFA
+    el.ttfaVal.textContent = f.ttfa + ' ms';
+
+    // Idle overlay
+    el.idleOverlay.style.display = idle ? 'flex' : 'none';
+
+    // Speaking badge
+    el.speakingBadge.style.display = aiSpeaking ? 'inline-block' : 'none';
+
+    // Language chips
+    renderLangChips(activeLangs);
+
+    // Waveform
+    renderWaveform(aiSpeaking, true);
+
+    // Caption bar
+    if (playing) {
+      el.captionBar.style.display = 'block';
+      el.captionLabel.textContent = active.who === 'ai' ? 'ÀDÙNNÍ · SPEAKING' : 'WOLE · TRANSCRIBING';
+      el.captionLabel.style.color = active.who === 'user' ? '#FFB098' : '#2FD4C4';
+      el.captionLangs.textContent = active.langs.join(' + ');
+      el.captionText.innerHTML = esc(typed) + '<span class="caption-cursor">▎</span>';
+    } else {
+      el.captionBar.style.display = 'none';
+    }
+
+    // User tile
+    el.userTile.style.display = idle ? 'none' : 'block';
+    if (userSpeaking) {
+      el.userTileInner.classList.add('speaking');
+      el.userTileLabel.classList.add('speaking');
+      el.userTileLabel.textContent = 'WOLE · SPEAKING';
+      el.userTileWf.style.display = 'flex';
+    } else {
+      el.userTileInner.classList.remove('speaking');
+      el.userTileLabel.classList.remove('speaking');
+      el.userTileLabel.textContent = 'WOLE';
+      el.userTileWf.style.display = 'none';
+    }
+
+    // Mic button
+    el.micBtnActive.style.display = userSpeaking ? 'flex' : 'none';
+    el.micBtnIdle.style.display = userSpeaking ? 'none' : 'flex';
+
+    // Replay button
+    el.replayBtn.style.display = done ? 'inline-block' : 'none';
+
+    // Transcript
+    renderTranscript(f);
+  }
+
+  // ── Driver loop ──
+  function ensureDriver() {
+    if (driverAlive) return;
+    driverAlive = true;
+
+    function check() {
+      if (!demoStartAt || lastFrameKey === 'done') return;
+      var f = computeFrame();
+      var key = f.phase === 'done' ? 'done' : f.phase + ':' + f.idx + ':' + f.chars;
+      if (key !== lastFrameKey) {
+        lastFrameKey = key;
+        render();
+      }
+    }
+
+    function loop() {
+      check();
+      if (lastFrameKey !== 'done') {
+        rafId = requestAnimationFrame(loop);
+      }
+    }
+    rafId = requestAnimationFrame(loop);
+    intervalId = setInterval(check, 250);
+  }
+
+  // ── Start demo ──
+  function startDemo() {
+    lastFrameKey = '';
+    demoStartAt = Date.now();
+    render();
+    ensureDriver();
+  }
+
+  // ── Cleanup ──
+  function cleanup() {
+    if (rafId) cancelAnimationFrame(rafId);
+    if (intervalId) clearInterval(intervalId);
+    rafId = null;
+    intervalId = null;
+    driverAlive = false;
+  }
+
+  // ── Utility: escape HTML ──
+  function esc(s) {
+    var div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  // ── Init ──
+  function init() {
+    cacheDOM();
+
+    // Initial render (idle state)
+    renderLangChips([]);
+    renderWaveform(false, true);
+
+    // Event listeners
+    el.startBtn.addEventListener('click', startDemo);
+    el.replayBtn.addEventListener('click', function() {
+      cleanup();
+      startDemo();
+    });
+
+    // Speed slider
+    el.speedSlider.addEventListener('input', function() {
+      demoSpeed = parseFloat(this.value);
+      el.speedVal.textContent = demoSpeed.toFixed(2) + '×';
+      // Re-render immediately to reflect new speed
+      if (demoStartAt && lastFrameKey !== 'done') {
+        lastFrameKey = '';
+        render();
+      }
+    });
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', cleanup);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>

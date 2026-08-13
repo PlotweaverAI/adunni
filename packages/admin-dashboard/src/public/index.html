@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Àdùnní — Admin Dashboard</title>
+<style>
+  :root {
+    --bg: #07090B;
+    --surface: #0D1117;
+    --surface-2: #161B22;
+    --border: #21262D;
+    --text: #E6EDF3;
+    --text-dim: #7D8590;
+    --accent: #2FD4C4;
+    --coral: #E4573C;
+    --amber: #F0B429;
+    --green: #3FB950;
+    --red: #F85149;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'DM Sans', -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+  .header { display: flex; align-items: center; gap: 16px; padding: 20px 32px; border-bottom: 1px solid var(--border); }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header .badge { font-size: 11px; padding: 4px 10px; border-radius: 20px; background: rgba(47,212,196,0.15); color: var(--accent); border: 1px solid rgba(47,212,196,0.3); }
+  .header .spacer { flex: 1; }
+  .header select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+
+  .container { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; padding: 24px 32px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .card h3 { font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+  .card .value { font-size: 32px; font-weight: 700; }
+  .card .sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .card .value.accent { color: var(--accent); }
+  .card .value.coral { color: var(--coral); }
+  .card .value.green { color: var(--green); }
+  .card .value.amber { color: var(--amber); }
+
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 0 32px 24px; }
+  .wide { grid-column: 1 / -1; }
+
+  .lang-bars { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .lang-bar { display: flex; align-items: center; gap: 12px; }
+  .lang-bar .label { width: 100px; font-size: 13px; }
+  .lang-bar .bar { flex: 1; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+  .lang-bar .fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+  .lang-bar .pct { width: 40px; text-align: right; font-size: 12px; color: var(--text-dim); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--text-dim); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+  .pill.active { background: rgba(63,185,80,0.15); color: var(--green); }
+  .pill.escalated { background: rgba(248,81,73,0.15); color: var(--red); }
+  .pill.ended { background: rgba(125,133,144,0.15); color: var(--text-dim); }
+
+  .latency-chart { display: flex; align-items: flex-end; gap: 4px; height: 120px; margin-top: 12px; }
+  .latency-bar { flex: 1; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 4px; opacity: 0.7; }
+  .latency-bar:hover { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>Àdùnní Admin</h1>
+    <span class="badge">PLATFORM MONITORING</span>
+    <div class="spacer"></div>
+    <select id="clientSelect">
+      <option value="all">All Clients</option>
+      <option value="savanna-bank">Savanna Bank</option>
+    </select>
+    <select id="timeRange">
+      <option value="24h">Last 24h</option>
+      <option value="7d">Last 7 days</option>
+      <option value="30d">Last 30 days</option>
+    </select>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <h3>Call Volume</h3>
+      <div class="value accent" id="callVolume">0</div>
+      <div class="sub">Total sessions</div>
+    </div>
+    <div class="card">
+      <h3>Resolution Rate</h3>
+      <div class="value green" id="resolutionRate">—</div>
+      <div class="sub">Resolved without escalation</div>
+    </div>
+    <div class="card">
+      <h3>Escalation Rate</h3>
+      <div class="value coral" id="escalationRate">—</div>
+      <div class="sub">Escalated to human</div>
+    </div>
+    <div class="card">
+      <h3>Avg Latency</h3>
+      <div class="value" id="avgLatency">— ms</div>
+      <div class="sub">Audio-in to audio-out (p50)</div>
+    </div>
+    <div class="card">
+      <h3>Active Sessions</h3>
+      <div class="value amber" id="activeSessions">0</div>
+      <div class="sub">Currently in progress</div>
+    </div>
+    <div class="card">
+      <h3>Error Rate</h3>
+      <div class="value" id="errorRate">0%</div>
+      <div class="sub">Failed actions / total</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h3>Language Distribution</h3>
+      <div class="lang-bars" id="langDist">
+        <div class="lang-bar"><span class="label">English (NG)</span><div class="bar"><div class="fill" style="width:0%;background:var(--accent)"></div></div><span class="pct">0%</span></div>
+        <div class="lang-bar"><span class="label">Pidgin</span><div class="bar"><div class="fill" style="width:0%;background:var(--coral)"></div></div><span class="pct">0%</span></div>
+        <div class="lang-bar"><span class="label">Yorùbá</span><div class="bar"><div class="fill" style="width:0%;background:var(--amber)"></div></div><span class="pct">0%</span></div>
+        <div class="lang-bar"><span class="label">Igbo</span><div class="bar"><div class="fill" style="width:0%;background:var(--green)"></div></div><span class="pct">0%</span></div>
+        <div class="lang-bar"><span class="label">Hausa</span><div class="bar"><div class="fill" style="width:0%;background:#A371F7"></div></div><span class="pct">0%</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Latency Breakdown (p50 per stage)</h3>
+      <div class="latency-chart" id="latencyChart">
+        <div class="latency-bar" style="height:40%" title="ASR: 180ms"></div>
+        <div class="latency-bar" style="height:60%" title="Orchestration: 320ms"></div>
+        <div class="latency-bar" style="height:30%" title="Action: 150ms"></div>
+        <div class="latency-bar" style="height:50%" title="TTS: 280ms"></div>
+      </div>
+      <div style="display:flex;justify-content:space-around;margin-top:8px;font-size:11px;color:var(--text-dim)">
+        <span>ASR</span><span>Orch</span><span>Action</span><span>TTS</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card wide">
+      <h3>Recent Sessions</h3>
+      <table>
+        <thead>
+          <tr><th>Session ID</th><th>Client</th><th>Caller</th><th>Languages</th><th>Turns</th><th>Status</th><th>Duration</th></tr>
+        </thead>
+        <tbody id="sessionsTable">
+          <tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:32px">No sessions yet. Start a call to see data.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function loadDashboard() {
+      try {
+        const resp = await fetch('/api/dashboard-data');
+        const data = await resp.json();
+        document.getElementById('callVolume').textContent = data.metrics.callVolume;
+        document.getElementById('resolutionRate').textContent = data.metrics.resolutionRate + '%';
+        document.getElementById('escalationRate').textContent = data.metrics.escalationRate + '%';
+        document.getElementById('avgLatency').textContent = data.metrics.avgLatencyMs + ' ms';
+        document.getElementById('activeSessions').textContent = data.metrics.activeSessions;
+      } catch (err) {
+        console.error('Dashboard load error:', err);
+      }
+    }
+    loadDashboard();
+    setInterval(loadDashboard, 5000);
+  </script>
+</body>
+</html>
