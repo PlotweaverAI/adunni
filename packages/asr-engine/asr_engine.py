@@ -241,16 +241,35 @@ async def transcribe(req: TranscribeRequest):
         raise HTTPException(status_code=400, detail="audio_path or audio_base64 is required")
 
     audio_path = req.audio_path
+    cleanup_files = []
 
     # Decode base64 audio to temp file if needed
-    cleanup = None
     if req.audio_base64:
         audio_bytes = base64.b64decode(req.audio_base64)
-        suffix = f".{req.encoding or 'wav'}"
-        cleanup = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        cleanup.write(audio_bytes)
-        cleanup.close()
-        audio_path = cleanup.name
+        encoding = req.encoding or "wav"
+        suffix = f".{encoding}"
+        raw_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        raw_file.write(audio_bytes)
+        raw_file.close()
+        cleanup_files.append(raw_file.name)
+        audio_path = raw_file.name
+
+        # Convert to WAV if not already (whisper/transformers need wav)
+        if encoding != "wav":
+            wav_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            wav_file.close()
+            cleanup_files.append(wav_file.name)
+            import subprocess
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_file.name],
+                capture_output=True, timeout=30
+            )
+            if result.returncode != 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"FFmpeg conversion failed: {result.stderr.decode()[:200]}"
+                )
+            audio_path = wav_file.name
 
     try:
         result = transcribe_audio(audio_path, req.language)
@@ -259,8 +278,9 @@ async def transcribe(req: TranscribeRequest):
         log.error(f"Transcription failed: {e}")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
     finally:
-        if cleanup and os.path.exists(cleanup.name):
-            os.unlink(cleanup.name)
+        for f in cleanup_files:
+            if os.path.exists(f):
+                os.unlink(f)
 
 
 @app.on_event("startup")

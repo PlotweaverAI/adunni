@@ -95,6 +95,11 @@
   .end-call-btn { width: 52px; height: 52px; border-radius: 50%; background: rgba(228,87,60,0.13); border: 1px solid rgba(228,87,60,0.4); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.2s; }
   .end-call-btn:hover { background: rgba(228,87,60,0.25); }
 
+  /* ── Mic button ── */
+  .mic-btn-active { width: 52px; height: 52px; border-radius: 50%; background: #E4573C; display: flex; align-items: center; justify-content: center; animation: micPulse 1.2s ease-out infinite; cursor: pointer; flex-shrink: 0; }
+  .mic-btn-idle { width: 52px; height: 52px; border-radius: 50%; background: #141A1E; border: 1px solid rgba(255,255,255,0.13); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: border-color 0.2s; flex-shrink: 0; }
+  .mic-btn-idle:hover { border-color: #2FD4C4; }
+
   /* ── Text input ── */
   .input-bar { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 600px; }
   .input-bar input { flex: 1; background: #0B1013; border: 1px solid rgba(255,255,255,0.13); border-radius: 12px; padding: 14px 18px; color: #F4F6F8; font-family: 'DM Sans', sans-serif; font-size: 15px; outline: none; transition: border-color 0.2s; }
@@ -250,8 +255,11 @@
       <!-- Bottom controls -->
       <div class="controls" id="controls">
         <div class="input-bar">
-          <input type="text" id="msg-input" placeholder="Type your message in any language…" disabled autocomplete="off" />
+          <input type="text" id="msg-input" placeholder="Type or speak in any language…" disabled autocomplete="off" />
           <button class="send-btn" id="send-btn" disabled>SEND</button>
+        </div>
+        <div class="mic-btn-idle" id="mic-btn" style="display:none;" title="Hold to speak (or click to toggle)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2FD4C4" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         </div>
         <div class="end-call-btn" id="end-call-btn" style="display:none;" title="End call">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF8A70" stroke-width="2"><path d="M4 12c5-5 11-5 16 0l-2.5 2.5c-1-1-2-1.6-3.5-2v3l-4 0v-3c-1.5 0.4-2.5 1-3.5 2z"/></svg>
@@ -310,6 +318,13 @@
   var connected = false;
   var lastLatency = 0;
 
+  // ── Audio state ──
+  var mediaRecorder = null;
+  var audioChunks = [];
+  var isRecording = false;
+  var audioContext = null;
+  var transcribing = false;
+
   // ── DOM refs ──
   var el = {};
   function cacheDOM() {
@@ -317,7 +332,7 @@
       'caption-bar','caption-label','caption-langs','caption-text',
       'idle-overlay','start-btn','idle-error','idle-desc',
       'user-tile','user-tile-inner','user-tile-label','user-tile-wf',
-      'msg-input','send-btn','end-call-btn','controls',
+      'msg-input','send-btn','end-call-btn','controls','mic-btn',
       'transcript-list','transcript-empty',
       'conn-status','session-id','latency-val','turn-count',
       'agent-name','agent-subtitle','brand-name','avatar-placeholder'];
@@ -414,21 +429,29 @@
     el.idleOverlay.style.display = connected ? 'none' : 'flex';
     el.userTile.style.display = connected ? 'block' : 'none';
     el.endCallBtn.style.display = connected ? 'flex' : 'none';
-    el.msgInput.disabled = !connected || aiSpeaking;
-    el.sendBtn.disabled = !connected || aiSpeaking;
+    el.micBtn.style.display = connected ? 'flex' : 'none';
+    el.msgInput.disabled = !connected || aiSpeaking || transcribing;
+    el.sendBtn.disabled = !connected || aiSpeaking || transcribing;
     el.speakingBadge.style.display = aiSpeaking ? 'inline-block' : 'none';
     el.avatarRing.className = aiSpeaking ? 'avatar-ring-pulse' : 'avatar-ring-static';
     renderWaveform(aiSpeaking, true);
 
-    if (userSpeaking) {
+    // Mic button state
+    if (isRecording) {
+      el.micBtn.className = 'mic-btn-active';
+    } else {
+      el.micBtn.className = 'mic-btn-idle';
+    }
+
+    if (userSpeaking || isRecording) {
       el.userTileInner.classList.add('speaking');
       el.userTileLabel.classList.add('speaking');
-      el.userTileLabel.textContent = 'YOU · SPEAKING';
+      el.userTileLabel.textContent = isRecording ? 'YOU · RECORDING' : 'YOU · SPEAKING';
       el.userTileWf.style.display = 'flex';
     } else {
       el.userTileInner.classList.remove('speaking');
       el.userTileLabel.classList.remove('speaking');
-      el.userTileLabel.textContent = 'YOU';
+      el.userTileLabel.textContent = transcribing ? 'YOU · TRANSCRIBING' : 'YOU';
       el.userTileWf.style.display = 'none';
     }
 
@@ -524,6 +547,8 @@
         connected = false;
         aiSpeaking = false;
         userSpeaking = false;
+        transcribing = false;
+        if (isRecording) stopRecording();
         setConnStatus('disconnected', 'OFFLINE');
         updateUI();
         el.startBtn.disabled = false;
@@ -536,6 +561,146 @@
       el.idleError.textContent = err.message || 'Failed to connect to the backend. Please try again.';
       el.idleError.style.display = 'block';
       el.startBtn.disabled = false;
+    }
+  }
+
+  // ── Microphone recording ──
+  async function startRecording() {
+    if (isRecording || !connected || aiSpeaking || transcribing) return;
+
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
+      });
+
+      // Pick the best supported format
+      var mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'audio/ogg;codecs=opus';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = '';
+          }
+        }
+      }
+
+      audioChunks = [];
+      mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType: mimeType })
+        : new MediaRecorder(stream);
+
+      mediaRecorder.ondataavailable = function(event) {
+        if (event.data && event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = function() {
+        // Combine all audio chunks and send as final
+        if (audioChunks.length > 0) {
+          var blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+          var reader = new FileReader();
+          reader.onload = function() {
+            var base64 = arrayBufferToBase64(reader.result);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'audio',
+                audioBase64: base64,
+                encoding: 'webm',
+                isFinal: true
+              }));
+            }
+            transcribing = true;
+            updateUI();
+          };
+          reader.readAsArrayBuffer(blob);
+        }
+        audioChunks = [];
+
+        // Stop all tracks
+        stream.getTracks().forEach(function(track) { track.stop(); });
+      };
+
+      mediaRecorder.start(100); // collect data in 100ms chunks
+      isRecording = true;
+      updateUI();
+    } catch (err) {
+      console.error('Microphone access error:', err);
+      el.idleError.textContent = 'Microphone access denied. You can still type to chat.';
+      el.idleError.style.display = 'block';
+      setTimeout(function() { el.idleError.style.display = 'none'; }, 4000);
+    }
+  }
+
+  function stopRecording() {
+    if (!isRecording || !mediaRecorder) return;
+    isRecording = false;
+    if (mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+    updateUI();
+  }
+
+  function toggleRecording() {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  }
+
+  // ── Convert ArrayBuffer to base64 ──
+  function arrayBufferToBase64(buffer) {
+    var binary = '';
+    var bytes = new Uint8Array(buffer);
+    var len = bytes.byteLength;
+    for (var i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  // ── Play TTS audio (PCM16 16kHz or base64 encoded audio) ──
+  function playTtsAudio(audioBase64, format, sampleRate) {
+    try {
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+
+      var binaryStr = atob(audioBase64);
+      var len = binaryStr.length;
+      var bytes = new Uint8Array(len);
+      for (var i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+
+      if (format === 'pcm16') {
+        // PCM16 16kHz mono → AudioBuffer
+        var dataView = new DataView(bytes.buffer);
+        var numSamples = Math.floor(len / 2);
+        var audioBuffer = audioContext.createBuffer(1, numSamples, sampleRate || 16000);
+        var channelData = audioBuffer.getChannelData(0);
+        for (var j = 0; j < numSamples; j++) {
+          channelData[j] = dataView.getInt16(j * 2, true) / 32768.0;
+        }
+        var source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+        source.start(0);
+      } else {
+        // For other formats (webm, ogg, etc.), use decodeAudioData
+        audioContext.decodeAudioData(bytes.buffer, function(buffer) {
+          var source = audioContext.createBufferSource();
+          source.buffer = buffer;
+          source.connect(audioContext.destination);
+          source.start(0);
+        }, function(err) {
+          console.error('[audio] decode failed:', err);
+        });
+      }
+    } catch (err) {
+      console.error('[audio] playback error:', err);
     }
   }
 
@@ -574,6 +739,7 @@
 
       } else if (turn.speaker === 'user') {
         userSpeaking = true;
+        transcribing = false;
         addTranscriptTurn('user', turn.text, turn.language, turn.englishTranslation);
         turnCount++;
 
@@ -598,9 +764,15 @@
       }
 
     } else if (msg.type === 'audio') {
-      // Audio received — could play it if we had audio support
-      // For now, we just note it
-      console.log('[audio] received audio response');
+      // TTS audio response from AI — play it
+      if (msg.audioBase64) {
+        playTtsAudio(msg.audioBase64, msg.format, msg.sampleRate);
+      }
+
+    } else if (msg.type === 'transcribing') {
+      // Backend is transcribing our audio
+      transcribing = true;
+      updateUI();
 
     } else if (msg.type === 'turn.complete') {
       // Turn completed
@@ -632,6 +804,7 @@
 
   // ── End the call ──
   function endCall() {
+    if (isRecording) stopRecording();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'end' }));
     }
@@ -656,6 +829,7 @@
     el.startBtn.addEventListener('click', startCall);
     el.sendBtn.addEventListener('click', sendMessage);
     el.endCallBtn.addEventListener('click', endCall);
+    el.micBtn.addEventListener('click', toggleRecording);
 
     el.msgInput.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -666,6 +840,7 @@
 
     // Cleanup on page unload
     window.addEventListener('beforeunload', function() {
+      if (isRecording) stopRecording();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'end' }));
         ws.close();

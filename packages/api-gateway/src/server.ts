@@ -447,6 +447,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
 
   let turnIndex = 0;
   let asrBuffer = '';
+  let audioBuffer: Buffer[] = [];
   let config: ClientConfig | null = null;
   let sessionActive = true;
   let setupDone = false;
@@ -464,14 +465,56 @@ wss.on('connection', async (ws: WebSocket, req) => {
       const msg = JSON.parse(data.toString());
 
       if (msg.type === 'audio') {
-        asrBuffer += Buffer.from(msg.audio, 'base64').toString('utf-8');
-        const lines = asrBuffer.split('\n');
-        asrBuffer = lines.pop() ?? '';
+        // Real audio chunk from browser microphone
+        // Buffer chunks until we get a complete utterance (isFinal flag or silence detection)
+        const audioChunk = msg.audioBase64 ? Buffer.from(msg.audioBase64, 'base64') : Buffer.from(msg.audio, 'base64');
+        audioBuffer.push(audioChunk);
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          await processUserUtterance(line, sessionId, clientId, config, ws, turnIndex);
-          turnIndex += 2;
+        // If marked as final, transcribe the full buffer via the ASR engine
+        if (msg.isFinal) {
+          if (audioBuffer.length > 0) {
+            const combined = Buffer.concat(audioBuffer);
+            audioBuffer = [];
+
+            ws.send(JSON.stringify({ type: 'transcribing' }));
+
+            try {
+              const asrEngineResp = await fetch(`${ASR_SERVICE_URL}/transcribe`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  audio_base64: combined.toString('base64'),
+                  encoding: msg.encoding || 'webm',
+                  language: msg.language || null,
+                }),
+              });
+
+              if (asrEngineResp.ok) {
+                const asrResult = await asrEngineResp.json() as { text: string; language: LanguageCode; confidence: number };
+                if (asrResult.text && asrResult.text.trim()) {
+                  await processUserUtteranceWithLanguage(
+                    asrResult.text,
+                    asrResult.language,
+                    asrResult.confidence,
+                    sessionId,
+                    clientId,
+                    config,
+                    ws,
+                    turnIndex
+                  );
+                  turnIndex += 2;
+                }
+              } else {
+                console.error('[gateway] ASR engine error:', asrEngineResp.status);
+                ws.send(JSON.stringify({ type: 'error', message: 'Speech recognition failed' }));
+              }
+            } catch (asrErr) {
+              console.error('[gateway] ASR engine error:', asrErr);
+              ws.send(JSON.stringify({ type: 'error', message: 'Speech recognition unavailable' }));
+            }
+          } else {
+            audioBuffer = [];
+          }
         }
       } else if (msg.type === 'text') {
         await processUserUtterance(msg.text, sessionId, clientId, config, ws, turnIndex);
@@ -529,6 +572,24 @@ async function processUserUtterance(
   });
   const asrResult = await asrResp.json() as { language: LanguageCode; confidence: number };
 
+  return processUserUtteranceWithLanguage(
+    text, asrResult.language, asrResult.confidence,
+    sessionId, clientId, config, ws, currentTurnIndex
+  );
+}
+
+async function processUserUtteranceWithLanguage(
+  text: string,
+  language: LanguageCode,
+  languageConfidence: number,
+  sessionId: string,
+  clientId: string,
+  config: ClientConfig | null,
+  ws: WebSocket,
+  currentTurnIndex: number
+) {
+  const startTime = Date.now();
+
   await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -536,17 +597,17 @@ async function processUserUtterance(
       sessionId,
       turnIndex: currentTurnIndex,
       speaker: 'user',
-      language: asrResult.language,
+      language,
       text,
       status: 'complete',
-      confidence: asrResult.confidence,
+      confidence: languageConfidence,
       latencyMs: Date.now() - startTime,
     }),
   });
 
   ws.send(JSON.stringify({
     type: 'transcript',
-    turn: { speaker: 'user', language: asrResult.language, text, confidence: asrResult.confidence },
+    turn: { speaker: 'user', language, text, confidence: languageConfidence },
   }));
 
   const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`);
@@ -558,8 +619,8 @@ async function processUserUtterance(
     config: config!,
     context,
     userUtterance: text,
-    detectedLanguage: asrResult.language,
-    languageConfidence: asrResult.confidence,
+    detectedLanguage: language,
+    languageConfidence,
   };
 
   const orchResp = await fetch(`${ORCHESTRATOR_URL}/process`, {
@@ -666,7 +727,7 @@ async function processUserUtterance(
 
   const aiLanguage = decision.type === 'respond' || decision.type === 'action' || decision.type === 'escalate' || decision.type === 'clarify'
     ? decision.language
-    : asrResult.language;
+    : language;
 
   await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
     method: 'POST',
