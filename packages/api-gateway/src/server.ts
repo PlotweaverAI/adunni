@@ -446,7 +446,6 @@ wss.on('connection', async (ws: WebSocket, req) => {
   console.log(`[gateway] WebSocket connected: session=${sessionId} client=${clientId}`);
 
   let turnIndex = 0;
-  let asrBuffer = '';
   let audioBuffer: Buffer[] = [];
   let config: ClientConfig | null = null;
   let sessionActive = true;
@@ -563,8 +562,6 @@ async function processUserUtterance(
   ws: WebSocket,
   currentTurnIndex: number
 ) {
-  const startTime = Date.now();
-
   const asrResp = await fetch(`${ASR_SERVICE_URL}/detect-language`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
