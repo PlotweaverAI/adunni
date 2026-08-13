@@ -419,7 +419,7 @@ app.post('/v1/video/conversation', authMiddleware, async (req: AuthenticatedRequ
     const conversation = await tavus.createConversation(echoPalId, conversationName);
 
     await auditLogger.logFromRequest(req, 'session_start', {
-      sessionId: sessionId,
+      sessionId: sessionId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId) ? sessionId : undefined,
       videoConversationId: conversation.conversation_id,
       action: 'video_conversation_created',
     });
