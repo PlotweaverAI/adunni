@@ -8,11 +8,11 @@ import type {
 } from '@adunni/shared-types';
 
 const LANGUAGE_KEYWORDS: Record<LanguageCode, string[]> = {
-  'en-NG': ['the', 'is', 'are', 'was', 'have', 'please', 'account', 'balance', 'transfer', 'limit', 'money', 'bank', 'error', 'morning', 'afternoon'],
-  'pcm': ['abeg', 'na', 'dey', 'wan', 'give', 'my', 'mama', 'wahala', 'make', 'i', 'naija', 'wetin', 'how', 'far', 'e', 'don', 'one-time', 'show'],
-  'yo': ['Ẹ', 'káàbọ̀', 'sọ̀rọ̀', 'èdè', 'owó', 'àkántì', 'kúrò', 'ṣé', 'rárã', 'fọwọ́', 'ránṣẹ́', 'pátápátá', 'léṣẹ̀kẹṣẹ̀', 'àkántì', 'yín'],
-  'ig': ['Daalụ', 'Ị', 'na-asụ', 'Igbo', 'ego', 'ahụ', 'eruola', 'ọma', 'a', 'na', 'm', 'asụ', 'nke', 'ukwuu'],
-  'ha': ['Madalla', 'Za', 'ka', 'iya', 'ci', 'gaba', 'da', 'Hausa', 'Mahaifiyata', 'kawai', 'take', 'ji', 'Ī', 'mana', 'Zan', 'aika', 'mata', 'saƙon', 'tabbatarwa', 'karɓi', 'daga', 'Komai', 'shirye', 'yake', 'sai', 'amince'],
+  'en-NG': ['the', 'is', 'are', 'was', 'were', 'have', 'has', 'please', 'account', 'balance', 'transfer', 'limit', 'money', 'bank', 'error', 'morning', 'afternoon', 'hello', 'want', 'need', 'check', 'would', 'could', 'should', 'thank', 'welcome', 'help', 'card', 'pin', 'loan', 'savings', 'deposit', 'withdraw', 'statement'],
+  'pcm': ['abeg', 'na', 'dey', 'wan', 'wahala', 'naija', 'wetin', 'far', 'don', 'one-time', 'show', 'sabi', 'papa', 'mama', 'chop', 'gos', 'beta', 'oga', 'madam', 'broda', 'sista', 'pikin', 'no', 'fit', 'make', 'wey', 'say', 'go', 'come', 'see', 'know', 'give', 'tell', 'ask', 'work', 'good', 'bad', 'big', 'small'],
+  'yo': ['bawo', 'e', 'ka', 'aro', 'kabo', 'soro', 'ede', 'owo', 'akanti', 'kuro', 'se', 'fowo', 'ranse', 'yin', 'mo', 'fe', 'ni', 'wa', 'nkan', 'nwon', 'kilode', 'da', 'lo', 'ti', 'n', 'a', 'wa', 'e', 'o', 'un', 'an', 'iru', 'eyi', 'naa', 'mi', 're', 'wa', 'yin', 'won', 'nbe', 'si', 'lati', 'si', 'fun', 'pelu', 'nipin', 'le', 'lori', 'abe', 'leyin', 'iwaju', 'ehin', 'okunrin', 'obinrin', 'omode', 'agba', 'ile', 'oko', 'ose', 'ose', 'aaro', 'osan', 'iro', 'ale', 'orun', 'ojo', 'osu', 'odu', 'odun'],
+  'ig': ['daalu', 'ndewo', 'biko', 'nna', 'nne', 'unu', 'anyi', 'mu', 'gi', 'ya', 'ha', 'ndi', 'ole', 'kedu', 'mma', 'ojo', 'ego', 'ahu', 'ulo', 'akwukwo', 'mmiri', 'oru', 'ubochi', 'abali', 'ututu', 'ehihie', 'ugbo', 'udu', 'ahu', 'ime', 'ime', 'nke', 'ukwuu', 'obere', 'nnukwu', 'na', 'na', 'ga', 'ga', 'cho', 'cho', 'ma', 'ma', 'were', 'were', 'bịa', 'bịa', 'gaa', 'gaa', 'sị', 'sị', 'mara', 'mara', 'ma', 'ma', 'bịa', 'nụ', 'nụ', 'ọma', 'ọjọ', 'ego', 'ụlọ', 'akwụkwọ', 'mmiri', 'ọrụ', 'ụbọchị'],
+  'ha': ['ina', 'sanin', 'son', 'adadin', 'kudin', 'cikin', 'asusun', 'na', 'ba', 'ko', 'da', 'ga', 'na', 'ka', 'ki', 'ke', 'ku', 'su', 'mu', 'ta', 'ya', 'yi', 'ce', 'ta', 'sai', 'amince', 'gaba', 'kawai', 'take', 'ji', 'mana', 'zan', 'aika', 'mata', 'sako', 'tabbatarwa', 'karbi', 'daga', 'komai', 'shirye', 'yake', 'madalla', 'iya', 'ci', 'za', 'hausa', 'mahaifiyata', 'gida', 'kudi', 'asusu', 'bashin', 'rancen', 'adaka', 'makubban', 'satar', 'banci', 'ceto', 'kwaso', 'riba', 'kudi', 'kudi'],
 };
 
 // ── Mock provider (keyword-based detection, used as fallback) ──
@@ -72,12 +72,21 @@ export class MockAsrProvider implements AsrProvider {
 
   detectLanguageFromText(text: string): { language: LanguageCode; confidence: number } {
     const lower = text.toLowerCase();
+    const words = new Set(lower.split(/[\s,.;:!?'"\-()]+/).filter(w => w.length > 0));
     const scores: Record<LanguageCode, number> = { 'en-NG': 0, 'pcm': 0, 'yo': 0, 'ig': 0, 'ha': 0 };
 
     for (const [lang, keywords] of Object.entries(LANGUAGE_KEYWORDS)) {
       for (const kw of keywords) {
-        if (lower.includes(kw.toLowerCase())) {
-          scores[lang as LanguageCode] += 1;
+        const kwLower = kw.toLowerCase();
+        // Use word boundary matching for short keywords, substring for longer ones
+        if (kwLower.length <= 3) {
+          if (words.has(kwLower)) {
+            scores[lang as LanguageCode] += 1;
+          }
+        } else {
+          if (lower.includes(kwLower)) {
+            scores[lang as LanguageCode] += 1;
+          }
         }
       }
     }

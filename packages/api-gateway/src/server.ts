@@ -911,9 +911,8 @@ async function processUserUtteranceWithLanguage(
     aiText = decision.prompt;
   }
 
-  const aiLanguage = decision.type === 'respond' || decision.type === 'action' || decision.type === 'escalate' || decision.type === 'clarify'
-    ? decision.language
-    : language;
+  // AI always responds in the user's detected language
+  const aiLanguage = language;
 
   // ── Translate AI response back to user's language if different ──
   let aiTextTranslated = aiText;

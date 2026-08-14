@@ -816,6 +816,11 @@
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
       }
 
+      // Resume if suspended (browser autoplay policy requires user interaction)
+      if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+
       var binaryStr = atob(audioBase64);
       var len = binaryStr.length;
       var bytes = new Uint8Array(len);
@@ -837,8 +842,8 @@
         source.connect(audioContext.destination);
         source.start(0);
       } else {
-        // For other formats (webm, ogg, etc.), use decodeAudioData
-        audioContext.decodeAudioData(bytes.buffer, function(buffer) {
+        // For other formats (wav, webm, ogg, etc.), use decodeAudioData
+        audioContext.decodeAudioData(bytes.buffer.slice(0), function(buffer) {
           var source = audioContext.createBufferSource();
           source.buffer = buffer;
           source.connect(audioContext.destination);
