@@ -664,11 +664,10 @@
   async function startRecording() {
     if (isRecording || !connected || aiSpeaking || transcribing) return;
 
-    // Use Web Speech API if available (faster, browser-native)
-    if (webSpeechSupported) {
-      startWebSpeechRecognition();
-      return;
-    }
+    // Prefer server-side ASR (STORM-OS-ASR-SMALL) over Web Speech API
+    // because the browser's Web Speech API doesn't support Nigerian languages
+    // (Yoruba, Igbo, Hausa, Pidgin) properly.
+    // Only fall back to Web Speech API if MediaRecorder is unavailable.
 
     try {
       var stream = await navigator.mediaDevices.getUserMedia({
@@ -735,6 +734,12 @@
       updateUI();
     } catch (err) {
       console.error('Microphone access error:', err);
+      // Fall back to Web Speech API if MediaRecorder failed
+      if (webSpeechSupported) {
+        console.log('Falling back to Web Speech API');
+        startWebSpeechRecognition();
+        return;
+      }
       el.idleError.textContent = 'Microphone access denied. You can still type to chat.';
       el.idleError.style.display = 'block';
       setTimeout(function() { el.idleError.style.display = 'none'; }, 4000);
