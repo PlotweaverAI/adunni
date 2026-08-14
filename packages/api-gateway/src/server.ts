@@ -1219,68 +1219,58 @@ async function processUserUtteranceWithLanguage(
   // ── TTS: synthesize AI response as real audio (streaming sentence-by-sentence) ──
   // STORM TTS generates Nigerian female voice audio (Morenike/Amina).
   // We stream sentence-by-sentence so the first sentence plays while later ones are still generating.
-  // - When video is active: send audio to Tavus as audio echo for lip-sync
-  // - When no video: send audio to frontend for playback
-  // - If STORM TTS fails: fall back to text echo (video) or browser SpeechSynthesis (no video)
+  // Audio is ALWAYS sent to the frontend via WebSocket. The frontend then:
+  //   - Plays it through the speakers (audio playback)
+  //   - Forwards it to Tavus via Daily sendAppMessage for lip-sync (client-side)
+  // This is the correct Tavus API pattern — echo messages go through Daily's data channel,
+  // not through server-side WebSocket connections to the Daily room URL.
   if (config && stormTts) {
     try {
       let chunkIndex = 0;
       await stormTts.generateStream(aiTextTranslated, aiLanguage, (chunkAudio, idx) => {
         const chunkBase64 = chunkAudio.toString('base64');
-        const isLast = idx === -1; // marker for last chunk (not used currently)
+        const isLast = idx === -1;
 
-        if (videoConversation && tavus) {
-          // Send each sentence's audio to Tavus for lip-sync
-          const vc = videoConversation as { conversationId: string; conversationUrl: string };
-          tavus.sendEchoMessage(vc.conversationUrl, vc.conversationId, '', {
-            audio: chunkBase64,
-            sampleRate: 24000,
-            inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}-${idx}`,
-            done: false,
-          }).catch((e: Error) => console.error('[gateway] video audio echo chunk error:', e));
-        } else {
-          // Send each sentence's audio to frontend for streaming playback
-          ws.send(JSON.stringify({
-            type: 'audio',
-            audioBase64: chunkBase64,
-            format: 'wav' as const,
-            sampleRate: 24000,
-            chunkIndex: chunkIndex++,
-            isLast: isLast,
-          }));
-        }
+        // Always send audio to frontend — it handles both playback AND Tavus echo
+        ws.send(JSON.stringify({
+          type: 'audio',
+          audioBase64: chunkBase64,
+          format: 'wav' as const,
+          sampleRate: 24000,
+          chunkIndex: chunkIndex++,
+          isLast: isLast,
+          language: aiLanguage,
+        }));
       });
 
-      // Send final marker for video mode
-      if (videoConversation && tavus) {
-        const vc = videoConversation as { conversationId: string; conversationUrl: string };
-        tavus.sendEchoMessage(vc.conversationUrl, vc.conversationId, '', {
-          audio: '',
-          sampleRate: 24000,
-          inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}-done`,
-          done: true,
-        }).catch((e: Error) => console.error('[gateway] video audio echo done error:', e));
-      } else {
-        // Send end marker for frontend
-        ws.send(JSON.stringify({ type: 'audio', audioBase64: '', format: 'wav', sampleRate: 24000, isLast: true }));
-      }
+      // Send end marker so frontend knows the audio stream is complete
+      ws.send(JSON.stringify({ type: 'audio', audioBase64: '', format: 'wav', sampleRate: 24000, isLast: true, language: aiLanguage }));
     } catch (err) {
       console.error('[gateway] STORM TTS error:', err instanceof Error ? err.message : err);
-      // Fall back: send text echo to Tavus (Tavus generates its own TTS)
-      if (videoConversation && tavus) {
-        tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiTextTranslated, {
-          inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
-          done: true,
-        }).catch((e: Error) => console.error('[gateway] video text echo (ai) fallback error:', e));
-      }
-      // Frontend will fall back to browser SpeechSynthesis
+      // STORM TTS failed — send text to frontend so it can use browser SpeechSynthesis
+      // and also send text echo to Tavus for lip-sync
+      ws.send(JSON.stringify({
+        type: 'audio',
+        audioBase64: '',
+        format: 'wav',
+        sampleRate: 24000,
+        isLast: true,
+        language: aiLanguage,
+        textFallback: aiTextTranslated,
+      }));
     }
-  } else if (videoConversation && tavus) {
-    // No STORM TTS configured — send text echo to Tavus
-    tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiTextTranslated, {
-      inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
-      done: true,
-    }).catch((e: Error) => console.error('[gateway] video echo (ai) error:', e));
+  } else {
+    // No STORM TTS configured — send text to frontend for browser SpeechSynthesis
+    // The frontend will also send it as text echo to Tavus for lip-sync
+    ws.send(JSON.stringify({
+      type: 'audio',
+      audioBase64: '',
+      format: 'wav',
+      sampleRate: 24000,
+      isLast: true,
+      language: aiLanguage,
+      textFallback: aiTextTranslated,
+    }));
   }
 
   ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: currentTurnIndex + 1 }));

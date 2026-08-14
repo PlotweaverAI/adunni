@@ -28,32 +28,52 @@
   .conn.wait{color:#F0B429;background:rgba(240,180,41,.1);border:1px solid rgba(240,180,41,.25)}
 
   .main{display:flex;flex:1;min-height:0}
-  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:30px;position:relative;background:radial-gradient(ellipse at 50% 35%,var(--ink-2) 0%,var(--ink) 70%)}
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:0;position:relative;background:#000;overflow:hidden}
 
-  .face-wrap{position:relative;width:min(220px,28vh);height:min(220px,28vh)}
+  /* Full-stage video container — Daily.co iframe fills this */
+  .video-stage{position:absolute;inset:0;width:100%;height:100%;background:#000;display:none}
+  .video-stage.active{display:block}
+  .video-stage iframe{width:100%;height:100%;border:0}
+
+  /* Fallback face (when no video) */
+  .face-wrap{position:relative;width:min(220px,28vh);height:min(220px,28vh);z-index:1}
   .face-ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(214,245,67,.3);padding:6px}
   .face-ring.pulse{inset:-6px;border:2px solid var(--lime);animation:rp 1.4s ease-out infinite}
   @keyframes rp{0%{box-shadow:0 0 0 0 rgba(214,245,67,.4)}100%{box-shadow:0 0 0 22px rgba(214,245,67,0)}}
   .face-img{width:100%;height:100%;border-radius:50%;object-fit:cover;background:var(--ink-3)}
   .face-video{width:100%;height:100%;border-radius:50%;object-fit:cover;background:var(--ink-3);display:none}
   .face-video.active{display:block}
+  .stage.no-video .face-wrap{display:none}
 
-  .name{font-size:28px;font-weight:800;letter-spacing:-.02em}
-  .sub{font-size:14px;color:var(--dim);margin-top:2px}
-  .chips{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;margin-top:10px}
+  .name{font-size:28px;font-weight:800;letter-spacing:-.02em;z-index:1}
+  .sub{font-size:14px;color:var(--dim);margin-top:2px;z-index:1}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;margin-top:10px;z-index:1}
   .chip{font-family:var(--mono);font-size:10px;letter-spacing:.06em;font-weight:700;padding:5px 11px;border-radius:999px;border:1px solid var(--line);color:var(--dim);transition:all .3s}
   .chip.on{border-color:var(--lime);color:var(--ink);background:var(--lime)}
 
-  .bars{display:flex;align-items:flex-end;gap:4px;height:30px}
+  .bars{display:flex;align-items:flex-end;gap:4px;height:30px;z-index:1}
   .bars i{width:5px;border-radius:3px;height:8px;background:var(--line);transition:all .2s}
   .bars.active i{background:var(--lime);animation:wf .7s ease-in-out infinite}
   @keyframes wf{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
 
-  .caption{max-width:600px;width:100%;background:rgba(11,18,12,.85);border:1px solid var(--line);border-radius:14px;padding:16px 20px;backdrop-filter:blur(6px)}
-  .cap-meta{display:flex;gap:9px;margin-bottom:7px;align-items:center}
+  /* Caption overlay — floats over video bottom */
+  .caption{position:absolute;bottom:80px;left:50%;transform:translateX(-50%);max-width:680px;width:90%;background:rgba(11,18,12,.85);border:1px solid var(--line);border-radius:14px;padding:14px 20px;backdrop-filter:blur(6px);z-index:5}
+  .cap-meta{display:flex;gap:9px;margin-bottom:5px;align-items:center}
   .cap-who{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;font-weight:700}
   .cap-lang{font-family:var(--mono);font-size:9.5px;color:var(--dim)}
-  .cap-text{font-size:18px;line-height:1.45;font-weight:500;min-height:26px}
+  .cap-text{font-size:17px;line-height:1.4;font-weight:500;min-height:24px}
+
+  /* Self-view PiP tile — user's own camera, bottom-right corner */
+  .selfview{position:absolute;bottom:16px;right:16px;width:160px;height:120px;border-radius:12px;overflow:hidden;border:2px solid var(--line);background:var(--ink-3);z-index:6;display:none;box-shadow:0 4px 20px rgba(0,0,0,.5)}
+  .selfview.active{display:block}
+  .selfview video{width:100%;height:100%;object-fit:cover}
+  .selfview .sv-label{position:absolute;bottom:4px;left:8px;font-family:var(--mono);font-size:8px;color:var(--paper);background:rgba(0,0,0,.6);padding:2px 6px;border-radius:4px}
+
+  /* Connecting spinner */
+  .connecting{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.7);z-index:8;gap:16px}
+  .spinner{width:48px;height:48px;border:3px solid var(--line);border-top-color:var(--lime);border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .connecting-text{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.1em}
 
   .idle{position:absolute;inset:0;background:rgba(11,18,12,.92);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);z-index:10}
   .idle-inner{text-align:center;max-width:440px;padding:20px}
@@ -118,16 +138,22 @@
   </div>
 
   <div class="main">
-    <div class="stage" id="stage">
+    <div class="stage no-video" id="stage">
+      <!-- Full-stage Daily.co video container (AI face fills the screen) -->
+      <div class="video-stage" id="videoStage"></div>
+
+      <!-- Fallback face circle (shown when no video) -->
       <div class="face-wrap" id="faceWrap">
         <div class="face-ring" id="faceRing"></div>
         <img class="face-img" id="faceImg" alt="Àdùnní">
         <video class="face-video" id="faceVideo" autoplay playsinline></video>
       </div>
-      <div class="name">Àdùnní</div>
+      <div class="name" id="stageName">Àdùnní</div>
       <div class="sub" id="sub">Conversational AI · One voice, five languages</div>
       <div class="chips" id="chips"></div>
       <div class="bars" id="bars"></div>
+
+      <!-- Caption overlay (floats over video) -->
       <div class="caption" id="caption" style="display:none">
         <div class="cap-meta">
           <span class="cap-who" id="capWho"></span>
@@ -136,6 +162,19 @@
         <div class="cap-text" id="capText"></div>
       </div>
 
+      <!-- Self-view PiP tile (user's camera, bottom-right) -->
+      <div class="selfview" id="selfview">
+        <video id="selfviewVideo" autoplay playsinline muted></video>
+        <span class="sv-label">YOU</span>
+      </div>
+
+      <!-- Connecting overlay (shown while Daily.co is joining) -->
+      <div class="connecting" id="connecting" style="display:none">
+        <div class="spinner"></div>
+        <div class="connecting-text" id="connectingText">JOINING CALL…</div>
+      </div>
+
+      <!-- Idle / start overlay -->
       <div class="idle" id="idle">
         <div class="idle-inner">
           <h2>Talk to Àdùnní</h2>
@@ -197,6 +236,13 @@ var el = {
   trBody: document.getElementById('trBody'),
   controls: document.getElementById('controls'),
   micBtn: document.getElementById('micBtn'),
+  stage: document.getElementById('stage'),
+  videoStage: document.getElementById('videoStage'),
+  selfview: document.getElementById('selfview'),
+  selfviewVideo: document.getElementById('selfviewVideo'),
+  connecting: document.getElementById('connecting'),
+  connectingText: document.getElementById('connectingText'),
+  stageName: document.getElementById('stageName'),
 };
 
 // Render lang chips
@@ -384,6 +430,7 @@ function vadCheck(){
       if(vadSpeechFrames>=5){
         console.log('[barge-in] User interrupting AI, stopping audio');
         stopCurrentAudio();
+        sendInterruptToTavus(); // stop Tavus face lip-sync too
         aiSpeaking=false;
         el.faceRing.classList.remove('pulse');
         setBars(false);
@@ -515,7 +562,13 @@ async function startCall(){
       if(videoConversation&&ws.readyState===WebSocket.OPEN){
         ws.send(JSON.stringify({type:'video',conversationId:videoConversation.conversationId,conversationUrl:videoConversation.conversationUrl}));
       }
-      if(videoConversation&&videoConversation.conversationUrl){joinVideo(videoConversation.conversationUrl);}
+      if(videoConversation&&videoConversation.conversationUrl){
+        showConnecting(true,'JOINING VIDEO CALL…');
+        joinVideo(videoConversation.conversationUrl);
+      }else{
+        // No video — just show the avatar circle
+        showConnecting(false);
+      }
       if(openMicEnabled)setTimeout(startOpenMic,300);
     };
 
@@ -525,6 +578,20 @@ async function startCall(){
       connected=false;aiSpeaking=false;transcribing=false;
       if(isRecording)stopVadRec();stopOpenMic();
       if(videoCall){try{videoCall.destroy();}catch(e){}videoCall=null;}
+      // Clean up self-view
+      if(el.selfviewVideo&&el.selfviewVideo.srcObject){
+        el.selfviewVideo.srcObject.getTracks().forEach(function(t){t.stop();});
+        el.selfviewVideo.srcObject=null;
+      }
+      el.selfview.classList.remove('active');
+      el.videoStage.classList.remove('active');
+      el.stage.classList.add('no-video');
+      showConnecting(false);
+      el.stageName.style.display='';
+      el.sub.style.display='';
+      el.chips.style.display='';
+      el.bars.style.display='';
+      el.faceWrap.style.display='';
       setConn('off','OFFLINE');
       el.idle.style.display='flex';
       el.controls.style.display='none';
@@ -540,11 +607,131 @@ async function startCall(){
 }
 
 function joinVideo(url){
-  if(typeof Daily!=='undefined'){
-    videoCall=Daily.createFrame(el.faceVideo.parentElement,{showLeaveButton:false,showFullscreenButton:false,showLocalVideo:false});
-    videoCall.join({url:url});
-    el.faceVideo.classList.add('active');
-    el.faceImg.style.display='none';
+  if(typeof Daily==='undefined'){
+    console.warn('[video] Daily.co not loaded — falling back to avatar circle');
+    showConnecting(false);
+    return;
+  }
+  showConnecting(true,'JOINING CALL…');
+
+  // Create Daily iframe filling the entire stage — AI face is the main participant
+  videoCall=Daily.createFrame(el.videoStage,{
+    showLeaveButton:false,
+    showFullscreenButton:false,
+    showLocalVideo:false,      // we handle self-view ourselves
+    showParticipantsBar:false,
+    showUserNameChange:false,
+    showChat:false,
+    showShareButton:false,
+    noDisplayNames:true,
+    width:'100%',
+    height:'100%',
+    iframeStyle:{border:'0',width:'100%',height:'100%'}
+  });
+
+  // Listen for Daily events
+  videoCall.on('joined-meeting',function(){
+    console.log('[video] Joined Daily meeting');
+    showConnecting(false);
+    el.videoStage.classList.add('active');
+    el.stage.classList.remove('no-video');
+    // Hide the fallback face circle elements
+    el.stageName.style.display='none';
+    el.sub.style.display='none';
+    el.chips.style.display='none';
+    el.bars.style.display='none';
+    el.faceWrap.style.display='none';
+    // Show self-view PiP
+    showSelfView();
+  });
+
+  videoCall.on('participant-joined',function(p){
+    console.log('[video] Participant joined:',p.user_id,p.local?'(local)':'(remote)');
+  });
+
+  videoCall.on('participant-left',function(p){
+    console.log('[video] Participant left:',p.user_id);
+  });
+
+  videoCall.on('app-message',function(e){
+    // Listen for Tavus utterance events (speaking states, etc.)
+    if(e&&e.event_type){
+      if(e.event_type==='conversation.started_speaking'&&e.properties&&e.properties.role==='pal'){
+        aiSpeaking=true;el.faceRing.classList.add('pulse');setBars(true);
+      }else if(e.event_type==='conversation.stopped_speaking'&&e.properties&&e.properties.role==='pal'){
+        aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);
+      }
+    }
+  });
+
+  videoCall.on('error',function(err){
+    console.error('[video] Daily error:',err);
+    showConnecting(false);
+  });
+
+  videoCall.join({url:url}).catch(function(e){
+    console.error('[video] Join failed:',e);
+    showConnecting(false);
+  });
+}
+
+function showConnecting(show,text){
+  if(el.connecting){
+    el.connecting.style.display=show?'flex':'none';
+    if(text&&el.connectingText)el.connectingText.textContent=text;
+  }
+}
+
+function showSelfView(){
+  // Get user's camera for the PiP self-view tile
+  navigator.mediaDevices.getUserMedia({video:true,audio:false}).then(function(stream){
+    if(el.selfviewVideo){
+      el.selfviewVideo.srcObject=stream;
+      el.selfview.classList.add('active');
+    }
+  }).catch(function(e){
+    console.warn('[selfview] Camera not available:',e);
+    // No self-view if camera denied — that's fine
+  });
+}
+
+// Send echo to Tavus face via Daily's sendAppMessage (the correct Tavus API way)
+function sendEchoToTavus(text,audioBase64,lang,isLast){
+  if(!videoCall||!videoConversation)return;
+  try{
+    var msg={
+      message_type:'conversation',
+      event_type:'conversation.echo',
+      conversation_id:videoConversation.conversationId,
+      properties:audioBase64?{
+        modality:'audio',
+        audio:audioBase64,
+        sample_rate:24000,
+        inference_id:'adunni-'+Date.now(),
+        done:isLast!==false
+      }:{
+        modality:'text',
+        text:text,
+        done:true
+      }
+    };
+    videoCall.sendAppMessage(msg,'*');
+  }catch(e){
+    console.warn('[tavus-echo] sendAppMessage error:',e);
+  }
+}
+
+// Send interrupt to Tavus face (stops AI mid-speech)
+function sendInterruptToTavus(){
+  if(!videoCall||!videoConversation)return;
+  try{
+    videoCall.sendAppMessage({
+      message_type:'conversation',
+      event_type:'conversation.interrupt',
+      conversation_id:videoConversation.conversationId
+    },'*');
+  }catch(e){
+    console.warn('[tavus-interrupt] error:',e);
   }
 }
 
@@ -587,9 +774,17 @@ function handleMsg(msg){
       // Only cancel speech synthesis on first chunk
       if(msg.chunkIndex===0||!msg.chunkIndex){if(speechSynthesis)speechSynthesis.cancel();stopCurrentAudio();}
       playTtsAudio(msg.audioBase64,msg.format,msg.sampleRate);
+      // Send echo to Tavus for lip-sync (audio modality)
+      sendEchoToTavus(null,msg.audioBase64,msg.language,msg.isLast);
+    } else if(msg.textFallback){
+      // No STORM TTS audio — use browser SpeechSynthesis and send text echo to Tavus
+      if(speechSynthesis)speakText(msg.textFallback,msg.language);
+      sendEchoToTavus(msg.textFallback,null,msg.language,true);
     } else if(msg.isLast){
-      // Last marker — no audio, just signal end
-      // Audio will finish playing on its own
+      // Last marker — tell Tavus the audio stream is done
+      if(videoCall&&videoConversation){
+        sendEchoToTavus(null,'',null,true);
+      }
     } else {
       aiSpeaking=false;updateUI();
     }
@@ -609,8 +804,24 @@ function handleMsg(msg){
 function endCall(){
   if(isRecording)stopVadRec();stopOpenMic();
   stopCurrentAudio();
+  sendInterruptToTavus();
   if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
   if(videoCall){try{videoCall.destroy();}catch(e){}videoCall=null;}
+  // Clean up self-view
+  if(el.selfviewVideo&&el.selfviewVideo.srcObject){
+    el.selfviewVideo.srcObject.getTracks().forEach(function(t){t.stop();});
+    el.selfviewVideo.srcObject=null;
+  }
+  el.selfview.classList.remove('active');
+  el.videoStage.classList.remove('active');
+  el.stage.classList.add('no-video');
+  showConnecting(false);
+  // Restore fallback face elements
+  el.stageName.style.display='';
+  el.sub.style.display='';
+  el.chips.style.display='';
+  el.bars.style.display='';
+  el.faceWrap.style.display='';
   if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'end'}));
   if(ws)ws.close();
 }
