@@ -210,6 +210,20 @@ def detect_language_from_text(text: str) -> dict:
 
 
 # ── Transcribe audio file ──
+def _transcribe_with_language(audio_path: str, language: str) -> str:
+    """Internal: transcribe with a specific forced language. Returns text only."""
+    pipeline, processor = _load_asr_pipeline()
+    forced_decoder_ids = _build_forced_decoder_ids(processor, language)
+    result = pipeline(
+        audio_path,
+        generate_kwargs={
+            "forced_decoder_ids": forced_decoder_ids,
+            "max_new_tokens": 225,
+        },
+    )
+    return result["text"].strip()
+
+
 def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     """
     Transcribe an audio file using STORM-OS-ASR-SMALL.
@@ -218,36 +232,52 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
       - Language is always forced via forced_decoder_ids (never auto-detect)
       - The pipeline handles chunking and stitching automatically
 
+    Two-pass approach when language is unknown (first utterance):
+      1. Transcribe with English forced to get rough text
+      2. Detect language from that text using keyword matching
+      3. If detected language differs, re-transcribe with correct language forced
+
     Args:
         audio_path: Path to audio file (wav, 16kHz mono preferred)
-        language: Adunni LanguageCode (e.g. "yo", "en-NG"). If None, defaults to "en-NG".
+        language: Adunni LanguageCode (e.g. "yo", "en-NG"). If None, two-pass detection.
 
     Returns:
         { text, language, confidence }
     """
-    if language is None or language not in LANG_TO_WHISPER_CODE:
-        language = "en-NG"
+    if language is not None and language in LANG_TO_WHISPER_CODE:
+        # Language known — single pass with forced language
+        text = _transcribe_with_language(audio_path, language)
+        detected = detect_language_from_text(text)
+        return {
+            "text": text,
+            "language": detected["language"],
+            "confidence": detected["confidence"],
+        }
 
-    pipeline, processor = _load_asr_pipeline()
-    forced_decoder_ids = _build_forced_decoder_ids(processor, language)
+    # Language unknown — two-pass: rough transcribe → detect → re-transcribe if needed
+    log.info("Two-pass ASR: language unknown, starting first pass with English")
+    rough_text = _transcribe_with_language(audio_path, "en-NG")
+    detected = detect_language_from_text(rough_text)
+    detected_lang = detected["language"]
 
-    # Use the pipeline with forced language (Option C from the technical guide)
-    result = pipeline(
-        audio_path,
-        generate_kwargs={
-            "forced_decoder_ids": forced_decoder_ids,
-            "max_new_tokens": 225,
-        },
-    )
-    text = result["text"].strip()
+    if detected_lang == "en-NG" or not rough_text:
+        # English or empty — return first pass result
+        return {
+            "text": rough_text,
+            "language": detected_lang,
+            "confidence": detected["confidence"],
+        }
 
-    # Detect language from the transcribed text (for metadata/logging)
-    detected = detect_language_from_text(text)
+    # Non-English detected — re-transcribe with the correct language forced
+    log.info(f"Two-pass ASR: detected {detected_lang} (conf={detected['confidence']:.2f}), re-transcribing")
+    text = _transcribe_with_language(audio_path, detected_lang)
+    # Re-detect on the corrected text (may differ slightly)
+    final_detected = detect_language_from_text(text) if text else detected
 
     return {
-        "text": text,
-        "language": detected["language"],
-        "confidence": detected["confidence"],
+        "text": text if text else rough_text,
+        "language": final_detected["language"],
+        "confidence": final_detected["confidence"],
     }
 
 
@@ -341,14 +371,15 @@ def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Opt
     Transcribe a partial audio chunk for streaming display.
     Uses the same STORM-OS-ASR-SMALL pipeline with forced language.
 
+    When language is unknown, uses the two-pass approach (rough English → detect → re-transcribe).
+    For partials, only does two-pass if the rough text has strong non-English markers
+    (to avoid doubling latency on every partial).
+
     Returns:
         { text, language, confidence, is_partial: True }
     """
     if len(audio_bytes) < 200:
         return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
-
-    if language is None or language not in LANG_TO_WHISPER_CODE:
-        language = "en-NG"
 
     suffix = f".{encoding}" if encoding else ".webm"
     raw_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
@@ -369,17 +400,25 @@ def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Opt
         if result.returncode != 0:
             return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
 
-        pipeline, processor = _load_asr_pipeline()
-        forced_decoder_ids = _build_forced_decoder_ids(processor, language)
+        # Determine which language to force
+        use_lang = language if (language and language in LANG_TO_WHISPER_CODE) else "en-NG"
+        do_two_pass = language is None or language not in LANG_TO_WHISPER_CODE
 
-        result = pipeline(
-            wav_file.name,
-            generate_kwargs={
-                "forced_decoder_ids": forced_decoder_ids,
-                "max_new_tokens": 225,
-            },
-        )
-        text = result["text"].strip()
+        text = _transcribe_with_language(wav_file.name, use_lang)
+
+        if do_two_pass and text:
+            detected = detect_language_from_text(text)
+            # Only re-transcribe if strong non-English signal (confidence > 0.7)
+            if detected["language"] != "en-NG" and detected["confidence"] > 0.7:
+                log.info(f"Partial two-pass: detected {detected['language']}, re-transcribing")
+                text = _transcribe_with_language(wav_file.name, detected["language"])
+                detected = detect_language_from_text(text) if text else detected
+                return {
+                    "text": text,
+                    "language": detected["language"],
+                    "confidence": detected["confidence"],
+                    "is_partial": True,
+                }
 
         if text:
             detected = detect_language_from_text(text)
