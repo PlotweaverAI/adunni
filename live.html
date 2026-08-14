@@ -169,7 +169,12 @@
 </div>
 
 <script>
+// API_BASE: use the gateway if we're served by it, otherwise fall back to the VPS gateway
 var API_BASE = window.location.origin;
+// Gateway runs on port 30000 on the VPS. If we're not on that port, point there.
+if (window.location.port !== '30000' || window.location.protocol.startsWith('file')) {
+  API_BASE = window.ADUNNI_API_BASE || 'http://67.211.210.8:30000';
+}
 var WS_BASE = API_BASE.replace(/^http/, 'ws');
 var LANG_NAMES = {'en-NG':'English','yo':'Yoruba','ig':'Igbo','ha':'Hausa','pcm':'Pidgin'};
 var LANGS = ['en-NG','yo','ig','ha','pcm'];
