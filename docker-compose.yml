@@ -87,6 +87,7 @@ services:
     environment:
       - PORT=3010
       - HF_TOKEN=${HF_TOKEN:-}
+      - HF_TOKEN_STORM=${HF_TOKEN_STORM:-}
     volumes:
       - asr-models:/models
     restart: unless-stopped

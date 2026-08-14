@@ -41,7 +41,11 @@ log = logging.getLogger("asr-engine")
 
 # ── Config ──
 PORT = int(os.getenv("PORT", "3010"))
+# Primary HF token (for NCAIR1 gated models)
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+# Secondary token for wolethereader org models (STORM-OS-ASR-SMALL)
+# The fine-grained NCAIR1 token doesn't have wolethereader org access, so we use a separate token
+HF_TOKEN_STORM = os.getenv("HF_TOKEN_STORM", HF_TOKEN)
 
 
 def _torch_cuda_available() -> bool:
@@ -55,12 +59,18 @@ def _torch_cuda_available() -> bool:
 DEVICE = "cuda" if _torch_cuda_available() else "cpu"
 
 # ── Model registry ──
-# Single model handles all five languages — STORM-OS-ASR-SMALL
-# Base: openai/whisper-small, LoRA-fine-tuned and merged for Nigerian languages
+# Per-language ASR models from NCAIR1 (dedicated, fine-tuned for each language)
+# Fallback: STORM-OS-ASR-SMALL (single model for all languages)
+NCAIR_MODELS = {
+    "yo": "NCAIR1/Yoruba-ASR",
+    "ig": "NCAIR1/Igbo-ASR",
+    "ha": "NCAIR1/Hausa-ASR",
+}
+
+# STORM-OS-ASR-SMALL: single model for all languages (fallback)
 STORM_MODEL_ID = "wolethereader/STORM-OS-ASR-SMALL"
 
 # Adunni LanguageCode -> Whisper language token code
-# Per the technical guide: always force language, never auto-detect
 LANG_TO_WHISPER_CODE = {
     "en-NG": "en",
     "yo":    "yo",
@@ -72,6 +82,9 @@ LANG_TO_WHISPER_CODE = {
 SUPPORTED_LANGUAGES = list(LANG_TO_WHISPER_CODE.keys())
 
 # ── Lazy-loaded model cache ──
+# Per-language pipelines (NCAIR1 models)
+_ncair_pipelines: dict[str, tuple] = {}  # lang -> (pipeline, processor)
+# STORM fallback pipeline
 _asr_pipeline = None
 _processor = None
 _forced_decoder_ids_cache: dict[str, list] = {}
@@ -99,15 +112,12 @@ def _build_forced_decoder_ids(processor, lang_code: str):
 
 
 def _load_asr_pipeline():
-    """Load the STORM-OS-ASR-SMALL pipeline (cached singleton).
+    """Load the STORM-OS-ASR-SMALL pipeline (cached singleton, used as fallback).
 
     STORM-OS-ASR-SMALL is a LoRA-merged checkpoint of openai/whisper-small.
     It ships model weights + tokenizer but NOT a preprocessor_config.json,
     so we load the processor (feature extractor + tokenizer) from the base
     model openai/whisper-small, and the model weights from STORM-OS-ASR-SMALL.
-
-    Uses transformers pipeline (Option C from the technical guide) with
-    chunk_length_s=30, stride_length_s=5 for automatic chunking + stitching.
     """
     global _asr_pipeline, _processor
     if _asr_pipeline is not None:
@@ -129,7 +139,7 @@ def _load_asr_pipeline():
 
     # Tokenizer from STORM model (has extended <|ig|> and <|pcm|> tokens)
     from transformers import WhisperTokenizerFast
-    tokenizer = WhisperTokenizerFast.from_pretrained(STORM_MODEL_ID, token=HF_TOKEN or None)
+    tokenizer = WhisperTokenizerFast.from_pretrained(STORM_MODEL_ID, token=HF_TOKEN_STORM or None)
 
     # Build a simple processor-like object for forced_decoder_ids construction
     class _SimpleProcessor:
@@ -142,7 +152,7 @@ def _load_asr_pipeline():
     model = WhisperForConditionalGeneration.from_pretrained(
         STORM_MODEL_ID,
         torch_dtype=torch.float32,
-        token=HF_TOKEN or None,
+        token=HF_TOKEN_STORM or None,
     )
     model.eval()
 
@@ -159,6 +169,57 @@ def _load_asr_pipeline():
 
     log.info(f"STORM-OS-ASR-SMALL pipeline loaded")
     return _asr_pipeline, _processor
+
+
+def _load_ncair_pipeline(lang: str):
+    """Load a per-language NCAIR1 ASR model (cached per language).
+
+    NCAIR1 models are fine-tuned whisper-small for each Nigerian language.
+    They include preprocessor_config.json (unlike STORM), so we can load
+    the processor directly from the model repo.
+    """
+    if lang in _ncair_pipelines:
+        return _ncair_pipelines[lang]
+
+    model_id = NCAIR_MODELS.get(lang)
+    if not model_id:
+        return None
+
+    import torch
+    from transformers import (
+        pipeline as hf_pipeline,
+        WhisperProcessor,
+        WhisperForConditionalGeneration,
+    )
+
+    log.info(f"Loading NCAIR1 ASR model: {model_id} for lang={lang} (device={DEVICE})")
+
+    try:
+        processor = WhisperProcessor.from_pretrained(model_id, token=HF_TOKEN or None)
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            token=HF_TOKEN or None,
+        )
+        model.eval()
+
+        pipe = hf_pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            tokenizer=processor.tokenizer,
+            feature_extractor=processor.feature_extractor,
+            chunk_length_s=30,
+            stride_length_s=5,
+            device=0 if DEVICE == "cuda" else -1,
+            torch_dtype=torch.float32,
+        )
+
+        _ncair_pipelines[lang] = (pipe, processor)
+        log.info(f"NCAIR1 ASR model loaded: {model_id}")
+        return _ncair_pipelines[lang]
+    except Exception as e:
+        log.warning(f"Failed to load NCAIR1 model {model_id}: {e}, will use STORM fallback")
+        return None
 
 
 # ── Language detection from text (keyword-based router) ──
@@ -249,7 +310,19 @@ def _clean_transcript(text: str) -> str:
 
 # ── Transcribe audio file ──
 def _transcribe_with_language(audio_path: str, language: str) -> str:
-    """Internal: transcribe with a specific forced language. Returns text only."""
+    """Internal: transcribe with a specific forced language. Returns text only.
+
+    Uses NCAIR1 per-language model if available (more accurate), falls back to STORM.
+    """
+    # Try NCAIR1 per-language model first
+    ncair = _load_ncair_pipeline(language)
+    if ncair is not None:
+        pipe, _ = ncair
+        # NCAIR1 models are fine-tuned for the language — no forced_decoder_ids needed
+        result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225})
+        return _clean_transcript(result["text"])
+
+    # Fall back to STORM-OS-ASR-SMALL with forced language
     pipeline, processor = _load_asr_pipeline()
     forced_decoder_ids = _build_forced_decoder_ids(processor, language)
     result = pipeline(
