@@ -207,6 +207,8 @@ var vadStream=null, vadAnalyser=null, vadInterval=null;
 var vadSpeechFrames=0, vadSilenceFrames=0, vadIsSpeaking=false;
 var aiSpeechFallbackTimer=null;
 var videoConversation=null, videoCall=null;
+var currentAudioSource=null; // for barge-in: stop current TTS playback
+var bargeInEnabled=true; // allow user to interrupt AI mid-speech
 
 function setConn(cls,txt){el.conn.className='conn '+cls;el.conn.textContent=txt;}
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -256,9 +258,14 @@ function removeThinking(){var t=document.getElementById('thinking');if(t)t.remov
 
 // ── TTS audio playback ──
 var audioCtx=null;
+function stopCurrentAudio(){
+  if(currentAudioSource){try{currentAudioSource.stop();}catch(e){}currentAudioSource=null;}
+  if(speechSynthesis)speechSynthesis.cancel();
+}
 function playTtsAudio(base64,format,sampleRate){
   if(speechSynthesis) speechSynthesis.cancel();
   if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
+  stopCurrentAudio();
   aiSpeaking=true;
   el.faceRing.classList.add('pulse');
   setBars(true);
@@ -274,7 +281,6 @@ function playTtsAudio(base64,format,sampleRate){
 
     if(format==='wav'||format==='pcm16'){
       if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:sampleRate||24000});
-      // For WAV: skip 44-byte header, decode PCM16
       var offset=format==='wav'?44:0;
       var samples=new Float32Array((buf.length-offset)/2);
       for(var j=0;j<samples.length;j++){
@@ -288,6 +294,7 @@ function playTtsAudio(base64,format,sampleRate){
       src.buffer=ab;
       src.connect(audioCtx.destination);
       src.onended=function(){aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);el.caption.style.display='none';updateUI();};
+      currentAudioSource=src;
       src.start(0);
     } else {
       if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)();
@@ -299,6 +306,7 @@ function playTtsAudio(base64,format,sampleRate){
           src.buffer=buffer;
           src.connect(audioCtx.destination);
           src.onended=function(){aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);el.caption.style.display='none';updateUI();};
+          currentAudioSource=src;
           src.start(0);
         },function(){aiSpeaking=false;updateUI();});
       };
@@ -359,7 +367,32 @@ function stopOpenMic(){
 
 function vadCheck(){
   if(!vadAnalyser||!connected)return;
-  if(aiSpeaking||transcribing){if(vadIsSpeaking){vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;}return;}
+  // Barge-in: if AI is speaking and user starts talking, stop AI audio
+  if(aiSpeaking&&bargeInEnabled){
+    var bbuf=new Float32Array(vadAnalyser.fftSize);
+    vadAnalyser.getFloatTimeDomainData(bbuf);
+    var bsum=0;for(var i=0;i<bbuf.length;i++)bsum+=bbuf[i]*bbuf[i];
+    var brms=Math.sqrt(bsum/bbuf.length);
+    // Higher threshold during AI speech to avoid echo triggering barge-in
+    if(brms>0.04){
+      vadSpeechFrames++;
+      if(vadSpeechFrames>=5){
+        console.log('[barge-in] User interrupting AI, stopping audio');
+        stopCurrentAudio();
+        aiSpeaking=false;
+        el.faceRing.classList.remove('pulse');
+        setBars(false);
+        vadSpeechFrames=0;vadSilenceFrames=0;
+        // Start recording the interruption
+        if(!isRecording){vadIsSpeaking=true;startVadRec();}
+        return;
+      }
+    }else{
+      vadSpeechFrames=0;
+    }
+    return;
+  }
+  if(transcribing){if(vadIsSpeaking){vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;}return;}
   var buf=new Float32Array(vadAnalyser.fftSize);
   vadAnalyser.getFloatTimeDomainData(buf);
   var sum=0;for(var i=0;i<buf.length;i++)sum+=buf[i]*buf[i];
@@ -380,7 +413,25 @@ async function startVadRec(){
     if(!MediaRecorder.isTypeSupported(mt)){mt='audio/webm';if(!MediaRecorder.isTypeSupported(mt)){mt='';}}
     audioChunks=[];
     mediaRecorder=mt?new MediaRecorder(vadStream,{mimeType:mt}):new MediaRecorder(vadStream);
-    mediaRecorder.ondataavailable=function(e){if(e.data&&e.data.size>0)audioChunks.push(e.data);};
+    // Stream chunks to server as they arrive (for streaming ASR)
+    var chunkCount=0;
+    mediaRecorder.ondataavailable=function(e){
+      if(e.data&&e.data.size>0){
+        audioChunks.push(e.data);
+        // Send partial audio every ~500ms (every 5th chunk at 100ms intervals)
+        chunkCount++;
+        if(chunkCount%5===0&&ws&&ws.readyState===WebSocket.OPEN){
+          var partialBlob=new Blob(audioChunks.slice(-5),{type:mediaRecorder.mimeType||'audio/webm'});
+          var r=new FileReader();
+          r.onload=function(){
+            if(ws&&ws.readyState===WebSocket.OPEN){
+              ws.send(JSON.stringify({type:'audio',audioBase64:arrayBufferToBase64(r.result),encoding:'webm',isFinal:false}));
+            }
+          };
+          r.readAsArrayBuffer(partialBlob);
+        }
+      }
+    };
     mediaRecorder.onstop=function(){
       if(audioChunks.length>0){
         var blob=new Blob(audioChunks,{type:mediaRecorder.mimeType||'audio/webm'});
@@ -436,9 +487,11 @@ async function startCall(){
     var ad=await ar.json();var jwt=ad.token;
 
     setConn('wait','CREATING SESSION…');
-    var sr=await fetch(API_BASE+'/v1/sessions',{method:'POST',headers:{'Authorization':'Bearer '+jwt,'Content-Type':'application/json'},body:JSON.stringify({clientId:'savanna-bank'})});
-    if(!sr.ok)throw new Error('Session failed');
-    var sd=await sr.json();var sid=sd.sessionId;var st=sd.streamToken;
+    var callerId='web-'+(localStorage.getItem('adunni_caller_id')||'');
+    if(!callerId||callerId==='web-'){callerId='web-'+crypto.randomUUID();localStorage.setItem('adunni_caller_id',callerId.replace('web-',''));}
+    var sr=await fetch(API_BASE+'/v1/sessions',{method:'POST',headers:{'Authorization':'Bearer '+jwt,'Content-Type':'application/json'},body:JSON.stringify({clientId:'savanna-bank',callerId:callerId,ndprConsent:true})});
+    if(!sr.ok){var se=await sr.json().catch(function(){return{}});throw new Error('Session failed ('+sr.status+'): '+(se.error||''));}
+    var sd=await sr.json();var sid=sd.id;var st=sd.streamToken;
 
     // Try video
     try{
@@ -524,9 +577,17 @@ function handleMsg(msg){
     }
   }else if(msg.type==='audio'){
     if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
-    if(speechSynthesis)speechSynthesis.cancel();
-    if(msg.audioBase64){playTtsAudio(msg.audioBase64,msg.format,msg.sampleRate);}
-    else{aiSpeaking=false;updateUI();}
+    if(msg.audioBase64){
+      // Streaming audio: play each chunk as it arrives
+      // Only cancel speech synthesis on first chunk
+      if(msg.chunkIndex===0||!msg.chunkIndex){if(speechSynthesis)speechSynthesis.cancel();stopCurrentAudio();}
+      playTtsAudio(msg.audioBase64,msg.format,msg.sampleRate);
+    } else if(msg.isLast){
+      // Last marker — no audio, just signal end
+      // Audio will finish playing on its own
+    } else {
+      aiSpeaking=false;updateUI();
+    }
   }else if(msg.type==='transcribing'){
     transcribing=true;updateUI();
   }else if(msg.type==='turn.complete'){
@@ -542,8 +603,8 @@ function handleMsg(msg){
 
 function endCall(){
   if(isRecording)stopVadRec();stopOpenMic();
+  stopCurrentAudio();
   if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
-  if(speechSynthesis)speechSynthesis.cancel();
   if(videoCall){try{videoCall.destroy();}catch(e){}videoCall=null;}
   if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'end'}));
   if(ws)ws.close();

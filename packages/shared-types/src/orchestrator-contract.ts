@@ -30,6 +30,7 @@ export interface OrchestratorResponse {
 export interface LlmProvider {
   name: string;
   complete: (request: LlmRequest) => Promise<LlmResponse>;
+  streamComplete?: (request: LlmRequest, onChunk: (text: string) => void) => Promise<LlmResponse>;
 }
 
 export interface LlmRequest {

@@ -71,6 +71,55 @@ export class StormTtsClient {
   }
 
   /**
+   * Generate speech for text, calling onChunk for each sentence's audio as it's ready.
+   * This enables streaming playback: the first sentence plays while later sentences
+   * are still being synthesized.
+   *
+   * @param text Full text to synthesize
+   * @param language Language code
+   * @param onChunk Called with each sentence's WAV audio as it's generated
+   * @returns Combined audio buffer (all sentences concatenated)
+   */
+  async generateStream(
+    text: string,
+    language: string,
+    onChunk: (audio: Buffer, sentenceIndex: number) => void,
+  ): Promise<{ audio: Buffer; format: 'wav'; sampleRate: 24000 }> {
+    // Split text into sentences for streaming
+    const sentences = splitSentences(text);
+    if (sentences.length === 0) {
+      return this.generate(text, language);
+    }
+
+    // If only one sentence, just generate it directly
+    if (sentences.length === 1) {
+      const result = await this.generate(sentences[0], language);
+      onChunk(result.audio, 0);
+      return result;
+    }
+
+    // Generate each sentence and stream as ready
+    const chunks: Buffer[] = [];
+    for (let i = 0; i < sentences.length; i++) {
+      try {
+        const result = await this.generate(sentences[i], language);
+        // Strip WAV header from subsequent chunks (44 bytes) for clean concatenation
+        const audioData = i === 0 ? result.audio : result.audio.subarray(44);
+        chunks.push(audioData);
+        // Send the full WAV (with header) for each chunk so frontend can play independently
+        onChunk(result.audio, i);
+      } catch (err) {
+        console.error(`[storm-tts] stream chunk ${i} failed:`, err instanceof Error ? err.message : err);
+        // Continue with remaining sentences even if one fails
+      }
+    }
+
+    // Combine all chunks
+    const combined = Buffer.concat(chunks);
+    return { audio: combined, format: 'wav' as const, sampleRate: 24000 };
+  }
+
+  /**
    * Check if the STORM TTS server is healthy.
    */
   async health(): Promise<boolean> {
@@ -97,4 +146,28 @@ export class StormTtsClient {
     }
     return await resp.json() as Record<string, unknown>;
   }
+}
+
+/**
+ * Split text into sentences for streaming TTS.
+ * Handles English, Yoruba, Igbo, Hausa, and Pidgin punctuation.
+ * Keeps sentences short enough for responsive streaming (max ~200 chars).
+ */
+function splitSentences(text: string): string[] {
+  // Split on sentence-ending punctuation (including Nigerian language punctuation)
+  const parts = text.split(/(?<=[.!?;।])\s+/);
+  const sentences: string[] = [];
+  let current = '';
+
+  for (const part of parts) {
+    if ((current + ' ' + part).trim().length > 200 && current) {
+      sentences.push(current.trim());
+      current = part;
+    } else {
+      current = current ? current + ' ' + part : part;
+    }
+  }
+  if (current.trim()) sentences.push(current.trim());
+
+  return sentences.filter((s) => s.length > 0);
 }

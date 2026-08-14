@@ -181,10 +181,37 @@ Escalation rules:
 
     const systemPrompt = this.buildSystemPrompt(config);
     const tools = this.buildTools(config.intents);
-    const conversationHistory = context.turns.map((t) => ({
-      role: (t.speaker === 'ai' ? 'assistant' : 'user') as 'user' | 'assistant',
-      content: t.text,
-    }));
+
+    // Context window management: keep last 8 turns as full text,
+    // summarize older turns to keep Gemini context small and fast
+    const allTurns = context.turns;
+    const recentTurns = allTurns.slice(-8);
+    const olderTurns = allTurns.slice(0, -8);
+
+    const conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+
+    // Add a summary of older conversation if there are any
+    if (olderTurns.length > 0) {
+      const summary = olderTurns.map((t) =>
+        `${t.speaker === 'ai' ? 'Adunni' : 'User'}: ${t.text.slice(0, 100)}`
+      ).join(' | ');
+      conversationHistory.push({
+        role: 'user',
+        content: `[Earlier in our conversation: ${summary}]`,
+      });
+      conversationHistory.push({
+        role: 'assistant',
+        content: 'Understood, I remember our earlier conversation.',
+      });
+    }
+
+    // Add recent turns as full text
+    for (const turn of recentTurns) {
+      conversationHistory.push({
+        role: (turn.speaker === 'ai' ? 'assistant' : 'user') as 'user' | 'assistant',
+        content: turn.text,
+      });
+    }
 
     // Inject detected language hint so the LLM knows which language to respond in
     const langName = LANGUAGE_NAMES[detectedLanguage] ?? detectedLanguage;
@@ -204,6 +231,9 @@ Escalation rules:
     let confidence = 0.85;
 
     if (llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
+      // Multi-turn tool calling: process all tool calls in sequence
+      // For the first tool call, create the decision. If multiple tools,
+      // chain them by noting the sequence in the response.
       const toolCall = llmResponse.toolCalls[0];
       const intent = config.intents.find((i) => i.actionName === toolCall.name);
 
@@ -225,6 +255,15 @@ Escalation rules:
           confirmationPrompt: `I will ${intent.description.toLowerCase()}. Do you confirm this action?`,
           language: detectedLanguage,
         };
+        // If there are more tool calls queued, mention them in the confirmation
+        if (llmResponse.toolCalls.length > 1) {
+          const nextTools = llmResponse.toolCalls.slice(1).map((tc) => {
+            const i = config.intents.find((x) => x.actionName === tc.name);
+            return i ? i.name : tc.name;
+          });
+          (decision as { confirmationPrompt: string }).confirmationPrompt +=
+            ` After that, I'll also: ${nextTools.join(', ')}.`;
+        }
       } else {
         intentName = intent.name;
         decision = {
@@ -236,6 +275,10 @@ Escalation rules:
           confirmationPrompt: '',
           language: detectedLanguage,
         };
+        // If multiple tools, include the text response with context about the chain
+        if (llmResponse.toolCalls.length > 1 && llmResponse.text) {
+          (decision as { text?: string }).text = llmResponse.text;
+        }
       }
     } else {
       decision = {

@@ -94,6 +94,28 @@ export class SessionStore implements SessionStoreService {
     return rows.map((r) => this.rowToTurn(r));
   }
 
+  /**
+   * Get recent turns across all sessions for a given client (cross-session memory).
+   * Returns the most recent turns ordered by time, useful for conversation continuity.
+   */
+  async getRecentTurnsByClient(clientId: string, limit = 10): Promise<Array<{ speaker: string; text: string; language: string }>> {
+    const { rows } = await this.pool.query(
+      `SELECT t.speaker, t.text, t.language
+       FROM transcript_turns t
+       JOIN sessions s ON t.session_id = s.id
+       WHERE s.client_id = $1 AND t.status = 'complete'
+       ORDER BY t.created_at DESC
+       LIMIT $2`,
+      [clientId, limit]
+    );
+    // Reverse to get chronological order
+    return rows.reverse().map((r) => ({
+      speaker: r.speaker,
+      text: r.text,
+      language: r.language,
+    }));
+  }
+
   async getConversationContext(sessionId: string): Promise<ConversationContext> {
     const [turns, actionsResult] = await Promise.all([
       this.getTurns(sessionId),

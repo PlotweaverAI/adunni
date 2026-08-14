@@ -655,6 +655,8 @@ wss.on('connection', async (ws: WebSocket, req) => {
   let config: ClientConfig | null = null;
   let sessionActive = true;
   let setupDone = false;
+  let serverVadSpeechFrames = 0;
+  let serverVadSilenceFrames = 0;
   let videoConversation: { conversationId: string; conversationUrl: string } | null = null;
   let partialTranscribeTimer: ReturnType<typeof setTimeout> | null = null;
   let lastPartialText = '';
@@ -678,6 +680,8 @@ wss.on('connection', async (ws: WebSocket, req) => {
         audioBuffer.push(audioChunk);
 
         // ── VAD: check if chunk contains speech ──
+        // Server-side VAD: detect speech/silence and auto-trigger transcription
+        // when the user pauses, even without client-side isFinal
         if (!msg.isFinal && audioChunk.length > 200) {
           try {
             const vadResp = await fetch(`${ASR_SERVICE_URL}/vad`, {
@@ -691,9 +695,55 @@ wss.on('connection', async (ws: WebSocket, req) => {
               signal: AbortSignal.timeout(5000),
             });
             if (vadResp.ok) {
-              await vadResp.json();
-              // VAD result available for future auto-stop logic
-              // Currently we still rely on client-side isFinal, but VAD data is collected
+              const vadResult = await vadResp.json() as { has_speech: boolean; speech_probability: number };
+              // Track speech/silence state for server-side VAD
+              if (vadResult.has_speech) {
+                serverVadSpeechFrames++;
+                serverVadSilenceFrames = 0;
+              } else if (serverVadSpeechFrames > 0) {
+                serverVadSilenceFrames++;
+                // Auto-trigger transcription after ~1.5s of silence following speech
+                if (serverVadSilenceFrames >= 15 && audioBuffer.length > 0) {
+                  console.log('[gateway] Server-side VAD detected end of speech, auto-transcribing');
+                  serverVadSpeechFrames = 0;
+                  serverVadSilenceFrames = 0;
+
+                  // Auto-finalize: trigger transcription of buffered audio
+                  if (partialTranscribeTimer) { clearTimeout(partialTranscribeTimer); partialTranscribeTimer = null; }
+                  const combined = Buffer.concat(audioBuffer);
+                  audioBuffer = [];
+                  lastPartialText = '';
+
+                  if (combined.length > 200) {
+                    ws.send(JSON.stringify({ type: 'transcribing' }));
+                    try {
+                      const asrEngineResp = await fetch(`${ASR_SERVICE_URL}/transcribe`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          audio_base64: combined.toString('base64'),
+                          encoding: msg.encoding || 'webm',
+                          language: detectedLanguage || msg.language || null,
+                        }),
+                        signal: AbortSignal.timeout(120000),
+                      });
+                      if (asrEngineResp.ok) {
+                        const asrResult = await asrEngineResp.json() as { text: string; language: LanguageCode; confidence: number };
+                        if (asrResult.text && asrResult.text.trim()) {
+                          detectedLanguage = asrResult.language;
+                          await processUserUtteranceWithLanguage(
+                            asrResult.text, asrResult.language, asrResult.confidence,
+                            sessionId, clientId, config, ws, turnIndex, videoConversation,
+                          );
+                          turnIndex += 2;
+                        }
+                      }
+                    } catch (asrErr) {
+                      console.error('[gateway] Server VAD auto-transcribe error:', asrErr instanceof Error ? asrErr.message : asrErr);
+                    }
+                  }
+                }
+              }
             }
           } catch {
             // VAD failed — continue without it (fail open)
@@ -849,6 +899,22 @@ wss.on('connection', async (ws: WebSocket, req) => {
     if (configResp.ok) {
       config = await configResp.json() as ClientConfig;
     }
+
+    // Load recent conversation history from previous sessions for cross-session memory
+    // This lets Adunni remember past conversations with the same client
+    try {
+      const histResp = await fetch(`${SESSION_STORE_URL}/clients/${clientId}/recent-turns?limit=10`);
+      if (histResp.ok) {
+        const histData = await histResp.json() as Array<{ speaker: string; text: string; language: string }>;
+        if (histData && histData.length > 0) {
+          // Store as initial context for this session
+          (ws as WebSocket & { priorHistory?: Array<{ speaker: string; text: string; language: string }> }).priorHistory = histData;
+          console.log(`[gateway] Loaded ${histData.length} prior turns for cross-session memory`);
+        }
+      }
+    } catch (histErr) {
+      console.warn('[gateway] Could not load prior history:', histErr instanceof Error ? histErr.message : histErr);
+    }
   } catch (err) {
     console.error('[gateway] setup error:', err);
   }
@@ -979,6 +1045,26 @@ async function processUserUtteranceWithLanguage(
   // Get context (non-blocking, already fast)
   const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`);
   const context = await ctxResp.json() as ConversationContext;
+
+  // Merge prior conversation history (cross-session memory) if available
+  const wsWithHistory = ws as WebSocket & { priorHistory?: Array<{ speaker: string; text: string; language: string }> };
+  if (wsWithHistory.priorHistory && wsWithHistory.priorHistory.length > 0 && context.turns.length === 0) {
+    // Only inject prior history at the start of a new session (when no turns yet)
+    context.turns = wsWithHistory.priorHistory.map((t, i) => ({
+      id: `prior-${i}`,
+      sessionId,
+      turnIndex: i - wsWithHistory.priorHistory!.length,
+      speaker: t.speaker as 'user' | 'ai',
+      language: t.language as LanguageCode,
+      text: t.text,
+      status: 'complete' as const,
+      confidence: 1.0,
+      createdAt: new Date(),
+    }));
+    // Clear after first use so it doesn't get injected again
+    wsWithHistory.priorHistory = undefined;
+    console.log(`[gateway] Injected ${context.turns.length} prior turns into context`);
+  }
 
   const orchRequest: OrchestratorRequest = {
     sessionId,
@@ -1130,32 +1216,53 @@ async function processUserUtteranceWithLanguage(
     turn: { speaker: 'ai', language: aiLanguage, text: aiTextTranslated, confidence: orchResult.confidence, englishTranslation: needsAiTranslation ? aiText : undefined },
   }));
 
-  // ── TTS: synthesize AI response as real audio ──
+  // ── TTS: synthesize AI response as real audio (streaming sentence-by-sentence) ──
   // STORM TTS generates Nigerian female voice audio (Morenike/Amina).
+  // We stream sentence-by-sentence so the first sentence plays while later ones are still generating.
   // - When video is active: send audio to Tavus as audio echo for lip-sync
   // - When no video: send audio to frontend for playback
   // - If STORM TTS fails: fall back to text echo (video) or browser SpeechSynthesis (no video)
   if (config && stormTts) {
     try {
-      const ttsResult = await stormTts.generate(aiTextTranslated, aiLanguage);
-      const audioBase64 = ttsResult.audio.toString('base64');
+      let chunkIndex = 0;
+      await stormTts.generateStream(aiTextTranslated, aiLanguage, (chunkAudio, idx) => {
+        const chunkBase64 = chunkAudio.toString('base64');
+        const isLast = idx === -1; // marker for last chunk (not used currently)
 
+        if (videoConversation && tavus) {
+          // Send each sentence's audio to Tavus for lip-sync
+          const vc = videoConversation as { conversationId: string; conversationUrl: string };
+          tavus.sendEchoMessage(vc.conversationUrl, vc.conversationId, '', {
+            audio: chunkBase64,
+            sampleRate: 24000,
+            inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}-${idx}`,
+            done: false,
+          }).catch((e: Error) => console.error('[gateway] video audio echo chunk error:', e));
+        } else {
+          // Send each sentence's audio to frontend for streaming playback
+          ws.send(JSON.stringify({
+            type: 'audio',
+            audioBase64: chunkBase64,
+            format: 'wav' as const,
+            sampleRate: 24000,
+            chunkIndex: chunkIndex++,
+            isLast: isLast,
+          }));
+        }
+      });
+
+      // Send final marker for video mode
       if (videoConversation && tavus) {
-        // Send STORM TTS audio to Tavus as audio echo — face lip-syncs to our Nigerian female voice
-        tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, '', {
-          audio: audioBase64,
-          sampleRate: ttsResult.sampleRate,
-          inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
+        const vc = videoConversation as { conversationId: string; conversationUrl: string };
+        tavus.sendEchoMessage(vc.conversationUrl, vc.conversationId, '', {
+          audio: '',
+          sampleRate: 24000,
+          inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}-done`,
           done: true,
-        }).catch((e: Error) => console.error('[gateway] video audio echo (ai) error:', e));
+        }).catch((e: Error) => console.error('[gateway] video audio echo done error:', e));
       } else {
-        // No video — send audio to frontend for playback
-        ws.send(JSON.stringify({
-          type: 'audio',
-          audioBase64,
-          format: ttsResult.format,
-          sampleRate: ttsResult.sampleRate,
-        }));
+        // Send end marker for frontend
+        ws.send(JSON.stringify({ type: 'audio', audioBase64: '', format: 'wav', sampleRate: 24000, isLast: true }));
       }
     } catch (err) {
       console.error('[gateway] STORM TTS error:', err instanceof Error ? err.message : err);

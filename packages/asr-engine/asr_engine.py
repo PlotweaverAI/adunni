@@ -149,12 +149,24 @@ def _load_asr_pipeline():
     _processor = _SimpleProcessor(tokenizer, feature_extractor)
 
     # Model weights from STORM-OS-ASR-SMALL (merged LoRA checkpoint)
+    # Use float16 on GPU, float32 on CPU (float16 is slow on CPU)
+    # On CPU, use BetterTransformer for faster inference if available
+    dtype = torch.float16 if DEVICE == "cuda" else torch.float32
     model = WhisperForConditionalGeneration.from_pretrained(
         STORM_MODEL_ID,
-        torch_dtype=torch.float32,
+        torch_dtype=dtype,
         token=HF_TOKEN_STORM or None,
     )
     model.eval()
+
+    # Enable BetterTransformer for CPU acceleration (2-3x faster on CPU)
+    if DEVICE == "cpu":
+        try:
+            from optimum.bettertransformer import BetterTransformer
+            model = BetterTransformer.transform(model)
+            log.info("Enabled BetterTransformer for CPU acceleration")
+        except ImportError:
+            log.info("optimum not installed, using standard transformer (install optimum for 2-3x CPU speedup)")
 
     _asr_pipeline = hf_pipeline(
         "automatic-speech-recognition",
@@ -196,12 +208,21 @@ def _load_ncair_pipeline(lang: str):
 
     try:
         processor = WhisperProcessor.from_pretrained(model_id, token=HF_TOKEN or None)
+        dtype = torch.float16 if DEVICE == "cuda" else torch.float32
         model = WhisperForConditionalGeneration.from_pretrained(
             model_id,
-            torch_dtype=torch.float32,
+            torch_dtype=dtype,
             token=HF_TOKEN or None,
         )
         model.eval()
+
+        # Enable BetterTransformer for CPU acceleration
+        if DEVICE == "cpu":
+            try:
+                from optimum.bettertransformer import BetterTransformer
+                model = BetterTransformer.transform(model)
+            except ImportError:
+                pass
 
         pipe = hf_pipeline(
             "automatic-speech-recognition",
@@ -211,7 +232,7 @@ def _load_ncair_pipeline(lang: str):
             chunk_length_s=30,
             stride_length_s=5,
             device=0 if DEVICE == "cuda" else -1,
-            torch_dtype=torch.float32,
+            torch_dtype=dtype,
         )
 
         _ncair_pipelines[lang] = (pipe, processor)

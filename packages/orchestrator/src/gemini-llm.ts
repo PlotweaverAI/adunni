@@ -15,6 +15,7 @@ import type { LlmProvider, LlmRequest, LlmResponse } from '@adunni/shared-types'
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-flash-latest';
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_STREAM_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent`;
 
 interface GeminiPart {
   text?: string;
@@ -192,5 +193,124 @@ export class GeminiLlmProvider implements LlmProvider {
         outputTokens: usage.candidatesTokenCount ?? 0,
       },
     };
+  }
+
+  /**
+   * Streaming completion — calls onChunk with text as it arrives from Gemini.
+   * Returns the final LlmResponse with full text + tool calls.
+   * Falls back to non-streaming if streaming fails.
+   */
+  async streamComplete(request: LlmRequest, onChunk: (text: string) => void): Promise<LlmResponse> {
+    if (!this.apiKey) {
+      throw new Error('GEMINI_API_KEY is not set');
+    }
+
+    // Build the same request body as complete()
+    const systemParts: string[] = [request.systemPrompt];
+    const contents: GeminiContent[] = [];
+
+    for (const turn of request.conversationHistory) {
+      contents.push({
+        role: turn.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: turn.content }],
+      });
+    }
+    contents.push({ role: 'user', parts: [{ text: request.userMessage }] });
+
+    const tools: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }> = [];
+    if (request.tools.length > 0) {
+      tools.push({
+        functionDeclarations: request.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters as Record<string, unknown>,
+        })),
+      });
+    }
+
+    const body: GeminiGenerateRequest = {
+      contents,
+      systemInstruction: { parts: [{ text: systemParts.join('\n\n') }] },
+      generationConfig: {
+        maxOutputTokens: request.maxTokens,
+        temperature: request.temperature,
+      },
+    };
+    if (tools.length > 0) body.tools = tools;
+
+    const url = `${GEMINI_STREAM_ENDPOINT}?key=${this.apiKey}&alt=sse`;
+
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (!resp.ok || !resp.body) {
+        // Fall back to non-streaming
+        console.warn('[gemini-llm] streaming failed, falling back to non-streaming');
+        return this.complete(request);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+      const toolCalls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE lines (data: {...})
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr || jsonStr === '[DONE]') continue;
+
+          try {
+            const chunk = JSON.parse(jsonStr) as GeminiGenerateResponse;
+            if (chunk.candidates && chunk.candidates.length > 0) {
+              const parts = chunk.candidates[0].content?.parts ?? [];
+              for (const part of parts) {
+                if (part.text) {
+                  fullText += part.text;
+                  onChunk(part.text);
+                }
+                if (part.functionCall) {
+                  toolCalls.push({
+                    name: part.functionCall.name,
+                    arguments: part.functionCall.args ?? {},
+                  });
+                }
+              }
+            }
+            if (chunk.usageMetadata) {
+              totalInputTokens = chunk.usageMetadata.promptTokenCount ?? totalInputTokens;
+              totalOutputTokens = chunk.usageMetadata.candidatesTokenCount ?? totalOutputTokens;
+            }
+          } catch {
+            // Partial JSON, skip
+          }
+        }
+      }
+
+      return {
+        text: fullText.trim(),
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+      };
+    } catch (err) {
+      console.warn('[gemini-llm] streaming error, falling back:', err instanceof Error ? err.message : err);
+      return this.complete(request);
+    }
   }
 }
