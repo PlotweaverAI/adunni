@@ -58,7 +58,7 @@ export class StormTtsClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ speaker_id: speaker, text }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(60000), // STORM TTS takes ~6s on GPU
     });
 
     if (!resp.ok) {

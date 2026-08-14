@@ -1023,16 +1023,16 @@
           aiSpeechFallbackTimer = null;
         }
 
-        // Browser SpeechSynthesis is the primary TTS (female voice, language-aware).
-        // If server TTS audio arrives, it will cancel browser speech and play instead.
+        // Wait for STORM TTS audio from server. Fall back to browser speech if it doesn't arrive.
         if (!videoConversation && speechSynthesis) {
-          // Small delay to allow server TTS audio to arrive first (avoids double voice)
+          // STORM TTS takes ~6s on GPU — wait up to 8s before falling back to browser voice
           aiSpeechFallbackTimer = setTimeout(function() {
             aiSpeechFallbackTimer = null;
             if (aiSpeaking) {
+              console.log('[tts] No STORM TTS audio received in 8s, falling back to browser speech');
               speakText(turn.text, turn.language);
             }
-          }, 300);
+          }, 8000);
         }
 
         updateUI();
