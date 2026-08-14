@@ -63,7 +63,7 @@ CREATE INDEX idx_turns_session ON transcript_turns(session_id, turn_index);
 CREATE TABLE IF NOT EXISTS action_logs (
   id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   session_id         UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  turn_id            UUID NOT NULL REFERENCES transcript_turns(id) ON DELETE CASCADE,
+  turn_id            UUID REFERENCES transcript_turns(id) ON DELETE CASCADE,
   intent_name        TEXT NOT NULL,
   action_name        TEXT NOT NULL,
   parameters         JSONB NOT NULL DEFAULT '{}',

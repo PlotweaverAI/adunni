@@ -831,7 +831,7 @@ async function processUserUtteranceWithLanguage(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
-          turnId: currentTurnIndex,
+          turnId: null,
           intentName: decision.intentName,
           actionName: decision.actionName,
           parameters: decision.parameters,
@@ -846,7 +846,7 @@ async function processUserUtteranceWithLanguage(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
-          turnId: currentTurnIndex,
+          turnId: null,
           intentName: decision.intentName,
           actionName: decision.actionName,
           parameters: decision.parameters,

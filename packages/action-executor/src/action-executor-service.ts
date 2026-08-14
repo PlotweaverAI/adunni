@@ -31,8 +31,12 @@ export class ActionExecutorServiceImpl implements ActionExecutorService {
     }
 
     try {
-      // If no webhook URL is configured, return a mock result (demo mode)
-      if (!request.webhookUrl) {
+      // If no webhook URL is configured or it's a fake/example URL, return a mock result (demo mode)
+      const isDemoWebhook = !request.webhookUrl ||
+        request.webhookUrl.includes('.example') ||
+        request.webhookUrl.includes('.test') ||
+        request.webhookUrl.includes('localhost');
+      if (isDemoWebhook) {
         const mockResult: Record<string, unknown> = {
           action: request.actionName,
           parameters: request.parameters,
