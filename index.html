@@ -331,10 +331,20 @@
   var audioContext = null;
   var transcribing = false;
 
+  // ── Web Speech API state ──
+  var speechRecognition = null;
+  var speechSynthesis = window.speechSynthesis || null;
+  var usingWebSpeech = false;
+  var currentAiUtterance = null;
+
   // ── Video state ──
   var dailyCall = null;
   var videoConversation = null; // { conversationId, conversationUrl }
   var videoEnabled = false;
+
+  // ── Check Web Speech API support ──
+  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var webSpeechSupported = !!SpeechRecognition;
 
   // ── DOM refs ──
   var el = {};
@@ -556,10 +566,16 @@
           });
           if (videoResp.ok) {
             videoConversation = await videoResp.json();
+          } else {
+            var videoErr = await videoResp.json().catch(function() { return {}; });
+            console.warn('[video] Conversation creation failed (' + videoResp.status + '):', videoErr.detail || videoErr.error || 'Unknown');
+            videoEnabled = false;
+            videoConversation = null;
           }
         } catch (e) {
-          console.error('Video conversation creation failed:', e);
+          console.warn('Video conversation creation failed:', e);
           videoEnabled = false;
+          videoConversation = null;
         }
       }
 
@@ -621,9 +637,15 @@
     }
   }
 
-  // ── Microphone recording ──
+  // ── Microphone recording (server-side ASR) ──
   async function startRecording() {
     if (isRecording || !connected || aiSpeaking || transcribing) return;
+
+    // Use Web Speech API if available (faster, browser-native)
+    if (webSpeechSupported) {
+      startWebSpeechRecognition();
+      return;
+    }
 
     try {
       var stream = await navigator.mediaDevices.getUserMedia({
@@ -696,8 +718,71 @@
     }
   }
 
+  // ── Web Speech API: SpeechRecognition (browser-native STT) ──
+  function startWebSpeechRecognition() {
+    if (!webSpeechSupported || isRecording) return;
+
+    speechRecognition = new SpeechRecognition();
+    speechRecognition.continuous = false;
+    speechRecognition.interimResults = true;
+    speechRecognition.lang = 'en-US'; // Start with English, server will detect actual language
+
+    var finalTranscript = '';
+
+    speechRecognition.onresult = function(event) {
+      var interim = '';
+      for (var i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interim += event.results[i][0].transcript;
+        }
+      }
+      // Show interim results in caption
+      if (interim) {
+        el.captionBar.style.display = 'block';
+        el.captionLabel.textContent = 'YOU · SPEAKING';
+        el.captionLabel.style.color = '#FFB098';
+        el.captionText.innerHTML = esc(interim);
+      }
+    };
+
+    speechRecognition.onerror = function(event) {
+      console.error('[speech] Recognition error:', event.error);
+      isRecording = false;
+      transcribing = false;
+      updateUI();
+    };
+
+    speechRecognition.onend = function() {
+      isRecording = false;
+      if (finalTranscript && finalTranscript.trim()) {
+        // Send transcribed text to server for processing (translation + AI response)
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'text', text: finalTranscript.trim() }));
+        }
+        transcribing = true;
+        updateUI();
+      }
+      updateUI();
+    };
+
+    speechRecognition.start();
+    isRecording = true;
+    usingWebSpeech = true;
+    updateUI();
+  }
+
   function stopRecording() {
-    if (!isRecording || !mediaRecorder) return;
+    if (!isRecording) return;
+    if (usingWebSpeech && speechRecognition) {
+      speechRecognition.stop();
+      isRecording = false;
+      usingWebSpeech = false;
+      updateUI();
+      return;
+    }
+    if (!mediaRecorder) return;
     isRecording = false;
     if (mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
@@ -767,6 +852,53 @@
     }
   }
 
+  // ── Web Speech API: SpeechSynthesis (browser-native TTS) ──
+  function speakText(text, language) {
+    if (!speechSynthesis) return;
+
+    // Cancel any ongoing speech
+    speechSynthesis.cancel();
+
+    var utterance = new SpeechSynthesisUtterance(text);
+    currentAiUtterance = utterance;
+
+    // Map language codes to BCP-47 for SpeechSynthesis
+    var langMap = {
+      'en-NG': 'en-US',
+      'pcm': 'en-US',
+      'yo': 'yo',
+      'ig': 'ig',
+      'ha': 'ha'
+    };
+    utterance.lang = langMap[language] || 'en-US';
+    utterance.rate = 0.95;
+    utterance.pitch = 1.0;
+
+    // Try to find a matching voice
+    var voices = speechSynthesis.getVoices();
+    if (voices && voices.length > 0) {
+      var match = voices.find(function(v) { return v.lang === utterance.lang; });
+      if (!match) {
+        match = voices.find(function(v) { return v.lang && v.lang.indexOf(utterance.lang.split('-')[0]) === 0; });
+      }
+      if (match) utterance.voice = match;
+    }
+
+    utterance.onend = function() {
+      aiSpeaking = false;
+      el.captionBar.style.display = 'none';
+      updateUI();
+    };
+
+    utterance.onerror = function() {
+      aiSpeaking = false;
+      el.captionBar.style.display = 'none';
+      updateUI();
+    };
+
+    speechSynthesis.speak(utterance);
+  }
+
   // ── Handle WebSocket messages ──
   function handleWsMessage(msg) {
     if (msg.type === 'transcript') {
@@ -791,14 +923,24 @@
         var activeLangs = turn.language ? [turn.language] : [];
         renderLangChips(activeLangs);
 
+        // Speak the AI response using Web Speech API when no video face is active
+        if (!videoConversation && speechSynthesis) {
+          speakText(turn.text, turn.language);
+        }
+
         updateUI();
 
-        // Reset AI speaking after a delay
-        setTimeout(function() {
-          aiSpeaking = false;
-          el.captionBar.style.display = 'none';
-          updateUI();
-        }, Math.max(1500, turn.text.length * 40));
+        // Reset AI speaking after a delay (or when speech ends)
+        var speakDuration = Math.max(1500, turn.text.length * 40);
+        if (!videoConversation && speechSynthesis) {
+          // onend callback from speakText will reset aiSpeaking
+        } else {
+          setTimeout(function() {
+            aiSpeaking = false;
+            el.captionBar.style.display = 'none';
+            updateUI();
+          }, speakDuration);
+        }
 
       } else if (turn.speaker === 'user') {
         userSpeaking = true;
@@ -871,6 +1013,7 @@
   // ── End the call ──
   function endCall() {
     if (isRecording) stopRecording();
+    if (speechSynthesis) speechSynthesis.cancel();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'end' }));
     }
@@ -941,6 +1084,7 @@
       el.avatarVideo.classList.remove('active');
       el.avatarVideo.srcObject = null;
     }
+    if (speechSynthesis) speechSynthesis.cancel();
     videoConversation = null;
     videoEnabled = false;
   }
@@ -956,6 +1100,14 @@
 
     // Fetch client config from backend
     fetchClientConfig();
+
+    // Preload SpeechSynthesis voices (Chrome loads them async)
+    if (speechSynthesis) {
+      speechSynthesis.getVoices();
+      speechSynthesis.onvoiceschanged = function() {
+        speechSynthesis.getVoices();
+      };
+    }
 
     // Event listeners
     el.startBtn.addEventListener('click', startCall);

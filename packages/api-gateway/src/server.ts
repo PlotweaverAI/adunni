@@ -447,8 +447,11 @@ app.post('/v1/video/conversation', authMiddleware, async (req: AuthenticatedRequ
       palId: echoPalId,
     });
   } catch (err) {
-    console.error('[gateway] createVideoConversation error:', err);
-    res.status(500).json({ error: 'Failed to create video conversation', detail: (err as Error).message });
+    const msg = (err as Error).message;
+    console.error('[gateway] createVideoConversation error:', msg);
+    const isTavusError = msg.includes('Tavus');
+    const status = isTavusError ? 503 : 500;
+    res.status(status).json({ error: 'Failed to create video conversation', detail: msg });
   }
 });
 
