@@ -158,6 +158,15 @@ def detect_language_from_text(text: str) -> dict:
     lower = text.lower()
     words = set(re.split(r'[\s,.;:!?\'"\-()]+', lower))
     words = {w for w in words if w}
+
+    # Pidgin catchphrase override: if any Pidgin marker is present, it's Pidgin
+    PCM_MARKERS = ["abeg", "dey", "wan", "wahala", "naija", "wetin", "sabi",
+                   "howfar", "watin", "oga", "madam", "broda", "sista", "pikin",
+                   "wey", "gos", "beta", "chop"]
+    for marker in PCM_MARKERS:
+        if marker in lower:
+            return {"language": "pcm", "confidence": 0.95}
+
     scores = {lang: 0 for lang in LANGUAGE_KEYWORDS}
 
     for lang, keywords in LANGUAGE_KEYWORDS.items():
