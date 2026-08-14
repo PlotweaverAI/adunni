@@ -614,27 +614,35 @@ function joinVideo(url){
   }
   showConnecting(true,'JOINING CALL…');
 
+  // Make the video stage visible BEFORE creating the iframe — Daily.co
+  // won't render properly inside a display:none container
+  el.videoStage.classList.add('active');
+  el.stage.classList.remove('no-video');
+
   // Create Daily iframe filling the entire stage — AI face is the main participant
+  // Only use valid Daily.co frame properties (invalid ones cause warnings + potential issues)
   videoCall=Daily.createFrame(el.videoStage,{
     showLeaveButton:false,
     showFullscreenButton:false,
-    showLocalVideo:false,      // we handle self-view ourselves
+    showLocalVideo:false,       // we handle self-view ourselves
     showParticipantsBar:false,
-    showUserNameChange:false,
-    showChat:false,
-    showShareButton:false,
-    noDisplayNames:true,
-    width:'100%',
-    height:'100%',
     iframeStyle:{border:'0',width:'100%',height:'100%'}
   });
+
+  var joinTimeout=setTimeout(function(){
+    console.error('[video] Join timeout — Daily.co did not fire joined-meeting within 20s');
+    showConnecting(false);
+    // Fall back to avatar circle mode
+    el.videoStage.classList.remove('active');
+    el.stage.classList.add('no-video');
+    if(videoCall){try{videoCall.destroy();}catch(e){}videoCall=null;}
+  },20000);
 
   // Listen for Daily events
   videoCall.on('joined-meeting',function(){
     console.log('[video] Joined Daily meeting');
+    clearTimeout(joinTimeout);
     showConnecting(false);
-    el.videoStage.classList.add('active');
-    el.stage.classList.remove('no-video');
     // Hide the fallback face circle elements
     el.stageName.style.display='none';
     el.sub.style.display='none';
@@ -666,12 +674,31 @@ function joinVideo(url){
 
   videoCall.on('error',function(err){
     console.error('[video] Daily error:',err);
+    clearTimeout(joinTimeout);
     showConnecting(false);
+    // Fall back to avatar circle mode
+    el.videoStage.classList.remove('active');
+    el.stage.classList.add('no-video');
+    el.stageName.style.display='';
+    el.sub.style.display='';
+    el.chips.style.display='';
+    el.bars.style.display='';
+    el.faceWrap.style.display='';
   });
 
-  videoCall.join({url:url}).catch(function(e){
+  videoCall.join({url:url}).then(function(){
+    console.log('[video] join() promise resolved');
+  }).catch(function(e){
     console.error('[video] Join failed:',e);
+    clearTimeout(joinTimeout);
     showConnecting(false);
+    el.videoStage.classList.remove('active');
+    el.stage.classList.add('no-video');
+    el.stageName.style.display='';
+    el.sub.style.display='';
+    el.chips.style.display='';
+    el.bars.style.display='';
+    el.faceWrap.style.display='';
   });
 }
 
