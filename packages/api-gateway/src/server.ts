@@ -838,6 +838,43 @@ wss.on('connection', async (ws: WebSocket, req) => {
     console.error('[gateway] setup error:', err);
   }
   setupDone = true;
+
+  // Send a greeting so the user knows the call is active and can start speaking
+  const greeting = config
+    ? `Hello! I'm ${config.voicePersona.name}. How are you doing today? You can speak to me in English, Yoruba, Igbo, Hausa, or Pidgin.`
+    : "Hello! I'm Adunni. How are you doing today? You can speak to me in English, Yoruba, Igbo, Hausa, or Pidgin.";
+
+  ws.send(JSON.stringify({
+    type: 'transcript',
+    turn: { speaker: 'ai', language: 'en-NG', text: greeting, confidence: 1.0 },
+  }));
+
+  // Generate TTS for the greeting
+  if (config && stormTts) {
+    try {
+      const ttsResult = await stormTts.generate(greeting, 'en-NG');
+      if (videoConversation && tavus) {
+        const vc = videoConversation as { conversationId: string; conversationUrl: string };
+        tavus.sendEchoMessage(vc.conversationUrl, vc.conversationId, '', {
+          audio: ttsResult.audio.toString('base64'),
+          sampleRate: ttsResult.sampleRate,
+          inferenceId: `greeting-${sessionId}`,
+          done: true,
+        }).catch((e: Error) => console.error('[gateway] greeting audio echo error:', e));
+      } else {
+        ws.send(JSON.stringify({
+          type: 'audio',
+          audioBase64: ttsResult.audio.toString('base64'),
+          format: ttsResult.format,
+          sampleRate: ttsResult.sampleRate,
+        }));
+      }
+    } catch (err) {
+      console.error('[gateway] greeting TTS error:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: 0 }));
 });
 
 async function processUserUtterance(
