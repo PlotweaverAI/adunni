@@ -260,6 +260,39 @@ def _transcribe_with_language(audio_path: str, language: str) -> str:
     return _clean_transcript(result["text"])
 
 
+def _detect_language_acoustic(audio_path: str) -> str:
+    """Use Whisper's built-in language detection to identify the spoken language.
+
+    This is unreliable for ig/pcm per the model card, but better than forcing English.
+    Returns a LanguageCode (en-NG, yo, ha, ig, pcm).
+    """
+    pipeline, processor = _load_asr_pipeline()
+    import torch
+    # Load audio
+    import librosa
+    audio, sr = librosa.load(audio_path, sr=16000)
+    inputs = processor.feature_extractor(audio, sampling_rate=16000, return_tensors="pt")
+    input_features = inputs.input_features.to(torch.float32)
+
+    # Use the model's detect_language method
+    model = pipeline.model
+    with torch.no_grad():
+        detected_ids, _ = model.detect_language(input_features)
+
+    # detected_ids is a tensor of token IDs — decode to get the language token
+    token = processor.tokenizer.decode(detected_ids[0])
+    # token looks like "<|yo|>" — extract the language code
+    import re as _re
+    match = _re.search(r"<\|(\w+)\|>", token)
+    if match:
+        lang_code = match.group(1)
+        # Map back to our LanguageCode
+        for adunni_code, whisper_code in LANG_TO_WHISPER_CODE.items():
+            if whisper_code == lang_code:
+                return adunni_code
+    return "en-NG"
+
+
 def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     """
     Transcribe an audio file using STORM-OS-ASR-SMALL.
@@ -290,28 +323,34 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
             "confidence": detected["confidence"],
         }
 
-    # Language unknown — two-pass: rough transcribe → detect → re-transcribe if needed
-    log.info("Two-pass ASR: language unknown, starting first pass with English")
-    rough_text = _transcribe_with_language(audio_path, "en-NG")
-    detected = detect_language_from_text(rough_text)
-    detected_lang = detected["language"]
+    # Language unknown — two-pass: acoustic detect → transcribe with detected language
+    log.info("Two-pass ASR: language unknown, detecting language acoustically")
+    try:
+        detected_lang = _detect_language_acoustic(audio_path)
+    except Exception as e:
+        log.warning(f"Acoustic detection failed: {e}, falling back to English")
+        detected_lang = "en-NG"
 
-    if detected_lang == "en-NG" or not rough_text:
-        # English or empty — return first pass result
-        return {
-            "text": rough_text,
-            "language": detected_lang,
-            "confidence": detected["confidence"],
-        }
+    log.info(f"Two-pass ASR: acoustic detection → {detected_lang}")
 
-    # Non-English detected — re-transcribe with the correct language forced
-    log.info(f"Two-pass ASR: detected {detected_lang} (conf={detected['confidence']:.2f}), re-transcribing")
+    # Transcribe with the acoustically detected language forced
     text = _transcribe_with_language(audio_path, detected_lang)
-    # Re-detect on the corrected text (may differ slightly)
-    final_detected = detect_language_from_text(text) if text else detected
+
+    # Also run keyword detection on the result to refine (in case acoustic was wrong)
+    text_detected = detect_language_from_text(text) if text else {"language": detected_lang, "confidence": 0.5}
+
+    # If keyword detection disagrees and has high confidence, re-transcribe
+    if text_detected["language"] != detected_lang and text_detected["confidence"] > 0.7:
+        log.info(f"Two-pass ASR: keyword detection disagrees ({text_detected['language']}), re-transcribing")
+        text2 = _transcribe_with_language(audio_path, text_detected["language"])
+        if text2 and len(text2) > len(text) * 0.5:
+            text = text2
+            detected_lang = text_detected["language"]
+
+    final_detected = detect_language_from_text(text) if text else {"language": detected_lang, "confidence": 0.5}
 
     return {
-        "text": text if text else rough_text,
+        "text": text,
         "language": final_detected["language"],
         "confidence": final_detected["confidence"],
     }
