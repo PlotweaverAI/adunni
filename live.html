@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Àdùnní · Live Call</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+<script crossorigin src="https://unpkg.com/@daily-co/daily-js"></script>
+<style>
+  :root{
+    --ink:#0B120C; --ink-2:#101A11; --ink-3:#15221A;
+    --lime:#D6F543; --lime-dim:#9DB532;
+    --paper:#F2F4EA; --dim:#8FA08B; --line:#263427;
+    --serif:Georgia,'Times New Roman',serif;
+    --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--ink);color:var(--paper);font-family:var(--serif);line-height:1.55;-webkit-font-smoothing:antialiased;overflow:hidden}
+  .mono{font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;font-size:11px}
+
+  .app{display:flex;flex-direction:column;height:100vh}
+  .topbar{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);flex-shrink:0}
+  .brand{font-weight:700;font-size:16px;letter-spacing:-.02em}
+  .tag{font-family:var(--mono);font-size:9px;color:var(--dim);margin-top:2px}
+  .conn{margin-left:auto;font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:999px}
+  .conn.on{color:#6BE06B;background:rgba(107,224,107,.1);border:1px solid rgba(107,224,107,.25)}
+  .conn.off{color:var(--dim);background:rgba(255,255,255,.05);border:1px solid var(--line)}
+  .conn.wait{color:#F0B429;background:rgba(240,180,41,.1);border:1px solid rgba(240,180,41,.25)}
+
+  .main{display:flex;flex:1;min-height:0}
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:30px;position:relative;background:radial-gradient(ellipse at 50% 35%,var(--ink-2) 0%,var(--ink) 70%)}
+
+  .face-wrap{position:relative;width:min(220px,28vh);height:min(220px,28vh)}
+  .face-ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(214,245,67,.3);padding:6px}
+  .face-ring.pulse{inset:-6px;border:2px solid var(--lime);animation:rp 1.4s ease-out infinite}
+  @keyframes rp{0%{box-shadow:0 0 0 0 rgba(214,245,67,.4)}100%{box-shadow:0 0 0 22px rgba(214,245,67,0)}}
+  .face-img{width:100%;height:100%;border-radius:50%;object-fit:cover;background:var(--ink-3)}
+  .face-video{width:100%;height:100%;border-radius:50%;object-fit:cover;background:var(--ink-3);display:none}
+  .face-video.active{display:block}
+
+  .name{font-size:28px;font-weight:800;letter-spacing:-.02em}
+  .sub{font-size:14px;color:var(--dim);margin-top:2px}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;margin-top:10px}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.06em;font-weight:700;padding:5px 11px;border-radius:999px;border:1px solid var(--line);color:var(--dim);transition:all .3s}
+  .chip.on{border-color:var(--lime);color:var(--ink);background:var(--lime)}
+
+  .bars{display:flex;align-items:flex-end;gap:4px;height:30px}
+  .bars i{width:5px;border-radius:3px;height:8px;background:var(--line);transition:all .2s}
+  .bars.active i{background:var(--lime);animation:wf .7s ease-in-out infinite}
+  @keyframes wf{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
+
+  .caption{max-width:600px;width:100%;background:rgba(11,18,12,.85);border:1px solid var(--line);border-radius:14px;padding:16px 20px;backdrop-filter:blur(6px)}
+  .cap-meta{display:flex;gap:9px;margin-bottom:7px;align-items:center}
+  .cap-who{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;font-weight:700}
+  .cap-lang{font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+  .cap-text{font-size:18px;line-height:1.45;font-weight:500;min-height:26px}
+
+  .idle{position:absolute;inset:0;background:rgba(11,18,12,.92);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);z-index:10}
+  .idle-inner{text-align:center;max-width:440px;padding:20px}
+  .idle h2{font-size:22px;font-weight:800;margin-bottom:8px}
+  .idle p{color:var(--dim);font-size:15px;line-height:1.55;margin-bottom:20px}
+  .btn{border:none;background:var(--lime);color:var(--ink);font-family:var(--mono);font-size:13px;letter-spacing:.06em;font-weight:700;padding:14px 28px;border-radius:11px;cursor:pointer;transition:background .2s}
+  .btn:hover{background:#E4FF5C}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.out{background:transparent;color:var(--paper);border:1px solid var(--line)}
+  .btn.out:hover{border-color:var(--lime)}
+
+  .controls{display:flex;align-items:center;justify-content:center;gap:14px;padding:16px 26px 22px;flex-shrink:0}
+  .mic{width:50px;height:50px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:all .2s}
+  .mic.on{background:var(--lime);animation:mp 1.2s ease-out infinite}
+  @keyframes mp{0%{box-shadow:0 0 0 0 rgba(214,245,67,.5)}100%{box-shadow:0 0 0 16px rgba(214,245,67,0)}}
+  .mic.off{background:var(--ink-3);border:1px solid var(--line)}
+  .mic.off:hover{border-color:var(--lime)}
+  .end{width:50px;height:50px;border-radius:50%;background:rgba(228,87,60,.13);border:1px solid rgba(228,87,60,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .2s}
+  .end:hover{background:rgba(228,87,60,.25)}
+
+  /* transcript panel */
+  .tr{width:400px;flex-shrink:0;border-left:1px solid var(--line);display:flex;flex-direction:column;background:var(--ink-2)}
+  .tr-head{display:flex;align-items:center;gap:10px;padding:15px 18px;border-bottom:1px solid var(--line);flex-shrink:0}
+  .tr-title{font-size:14px;font-weight:700}
+  .tr-body{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
+  .msg{display:flex;flex-direction:column;animation:fi .3s ease}
+  @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .msg.ai{align-items:flex-start}
+  .msg.user{align-items:flex-end}
+  .mhead{display:flex;gap:6px;margin-bottom:4px;align-items:center}
+  .who-ai{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--lime)}
+  .who-user{font-family:var(--mono);font-size:9px;font-weight:700;color:#D9C08F}
+  .mlang{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .mtext{max-width:88%;padding:11px 14px;font-size:14px;line-height:1.5}
+  .msg.ai .mtext{background:rgba(214,245,67,.08);border:1px solid rgba(214,245,67,.2);border-radius:3px 13px 13px 13px}
+  .msg.user .mtext{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:13px 3px 13px 13px}
+  .mtrans{max-width:88%;font-size:12px;color:var(--dim);font-style:italic;margin-top:4px;line-height:1.4}
+  .tr-empty{color:var(--dim);font-size:13px;text-align:center;margin-top:30px}
+  .tr-foot{border-top:1px solid var(--line);padding:12px 18px;flex-shrink:0;font-family:var(--mono);font-size:9px;color:var(--dim)}
+
+  .thinking{display:flex;gap:4px;padding:11px 14px;background:rgba(214,245,67,.08);border:1px solid rgba(214,245,67,.2);border-radius:3px 13px 13px 13px}
+  .tdot{width:6px;height:6px;border-radius:50%;background:var(--lime);animation:wf 1s ease-in-out infinite}
+  .tdot:nth-child(2){animation-delay:.15s}
+  .tdot:nth-child(3){animation-delay:.3s}
+
+  ::-webkit-scrollbar{width:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+
+  @media(max-width:800px){.tr{width:280px}}
+  @media(max-width:600px){.main{flex-direction:column}.tr{width:100%;height:180px;border-left:none;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div>
+      <div class="brand">Àdùnní</div>
+      <div class="tag">LIVE CONVERSATIONAL AI</div>
+    </div>
+    <span class="conn off" id="conn">OFFLINE</span>
+  </div>
+
+  <div class="main">
+    <div class="stage" id="stage">
+      <div class="face-wrap" id="faceWrap">
+        <div class="face-ring" id="faceRing"></div>
+        <img class="face-img" id="faceImg" alt="Àdùnní">
+        <video class="face-video" id="faceVideo" autoplay playsinline></video>
+      </div>
+      <div class="name">Àdùnní</div>
+      <div class="sub" id="sub">Conversational AI · One voice, five languages</div>
+      <div class="chips" id="chips"></div>
+      <div class="bars" id="bars"></div>
+      <div class="caption" id="caption" style="display:none">
+        <div class="cap-meta">
+          <span class="cap-who" id="capWho"></span>
+          <span class="cap-lang" id="capLang"></span>
+        </div>
+        <div class="cap-text" id="capText"></div>
+      </div>
+
+      <div class="idle" id="idle">
+        <div class="idle-inner">
+          <h2>Talk to Àdùnní</h2>
+          <p>A conversational AI who speaks English, Yoruba, Igbo, Hausa and Pidgin. Just start talking — no need to press any button. She can chat, answer questions, and help with tasks.</p>
+          <button class="btn" id="startBtn" onclick="startCall()">▶ START LIVE CALL</button>
+          <div id="idleErr" style="color:#F85149;font-size:13px;margin-top:12px;display:none"></div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="tr">
+      <div class="tr-head">
+        <span class="tr-title">Live transcript</span>
+        <span class="chip on" style="font-size:9px">AUTO DETECT</span>
+      </div>
+      <div class="tr-body" id="trBody">
+        <div class="tr-empty">Transcript appears here once the call starts.</div>
+      </div>
+      <div class="tr-foot">ASR NCAIR1/STORM · LLM GEMINI FLASH · TTS STORM · FACE TAVUS</div>
+    </aside>
+  </div>
+
+  <div class="controls" id="controls" style="display:none">
+    <div class="end" id="endBtn" onclick="endCall()" title="End call">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12c0-5 4-9 9-9s9 4 9 9" stroke="#E4573C" stroke-width="2" stroke-linecap="round"/></svg>
+    </div>
+    <div class="mic on" id="micBtn" onclick="toggleMic()" title="Mute / Unmute">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/><path d="M5 11c0 4 3 7 7 7s7-3 7-7M12 18v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+</div>
+
+<script>
+var API_BASE = window.location.origin;
+var WS_BASE = API_BASE.replace(/^http/, 'ws');
+var LANG_NAMES = {'en-NG':'English','yo':'Yoruba','ig':'Igbo','ha':'Hausa','pcm':'Pidgin'};
+var LANGS = ['en-NG','yo','ig','ha','pcm'];
+
+var el = {
+  conn: document.getElementById('conn'),
+  idle: document.getElementById('idle'),
+  idleErr: document.getElementById('idleErr'),
+  startBtn: document.getElementById('startBtn'),
+  faceImg: document.getElementById('faceImg'),
+  faceVideo: document.getElementById('faceVideo'),
+  faceRing: document.getElementById('faceRing'),
+  sub: document.getElementById('sub'),
+  chips: document.getElementById('chips'),
+  bars: document.getElementById('bars'),
+  caption: document.getElementById('caption'),
+  capWho: document.getElementById('capWho'),
+  capLang: document.getElementById('capLang'),
+  capText: document.getElementById('capText'),
+  trBody: document.getElementById('trBody'),
+  controls: document.getElementById('controls'),
+  micBtn: document.getElementById('micBtn'),
+};
+
+// Render lang chips
+LANGS.forEach(function(l){var s=document.createElement('span');s.className='chip';s.textContent=LANG_NAMES[l];el.chips.appendChild(s);});
+// Render bars
+for(var i=0;i<7;i++){var b=document.createElement('i');el.bars.appendChild(b);}
+
+// State
+var ws=null, connected=false, aiSpeaking=false, transcribing=false;
+var mediaRecorder=null, audioChunks=[], isRecording=false;
+var openMicEnabled=true;
+var vadStream=null, vadAnalyser=null, vadInterval=null;
+var vadSpeechFrames=0, vadSilenceFrames=0, vadIsSpeaking=false;
+var aiSpeechFallbackTimer=null;
+var videoConversation=null, videoCall=null;
+
+function setConn(cls,txt){el.conn.className='conn '+cls;el.conn.textContent=txt;}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function renderLangs(active){
+  var chips=el.chips.children;
+  for(var i=0;i<chips.length;i++){
+    chips[i].classList.toggle('on', active && active.indexOf(LANGS[i])>=0);
+  }
+}
+
+function setBars(active){
+  el.bars.querySelectorAll('i').forEach(function(b){
+    if(active){b.style.height='100%';b.style.animation='wf 0.7s ease-in-out infinite';b.style.background='var(--lime)';}
+    else{b.style.height='8px';b.style.animation='none';b.style.background='var(--line)';}
+  });
+}
+
+function addTurn(speaker,text,lang,trans){
+  // Remove empty placeholder
+  var empty=el.trBody.querySelector('.tr-empty');
+  if(empty) empty.remove();
+
+  var m=document.createElement('div');
+  m.className='msg '+(speaker==='ai'?'ai':'user');
+  var h=document.createElement('div');h.className='mhead';
+  var w=document.createElement('span');w.className=speaker==='ai'?'who-ai':'who-user';
+  w.textContent=speaker==='ai'?'ÀDÙNNÍ':'YOU';h.appendChild(w);
+  if(lang){var l=document.createElement('span');l.className='mlang';l.textContent=LANG_NAMES[lang]||lang;h.appendChild(l);}
+  m.appendChild(h);
+  var t=document.createElement('div');t.className='mtext';t.textContent=text;m.appendChild(t);
+  if(trans){var tr=document.createElement('div');tr.className='mtrans';tr.textContent=trans;m.appendChild(tr);}
+  el.trBody.appendChild(m);
+  el.trBody.scrollTop=el.trBody.scrollHeight;
+}
+
+function addThinking(){
+  var empty=el.trBody.querySelector('.tr-empty');if(empty)empty.remove();
+  var m=document.createElement('div');m.className='msg ai';m.id='thinking';
+  var t=document.createElement('div');t.className='thinking';
+  for(var i=0;i<3;i++){var d=document.createElement('span');d.className='tdot';t.appendChild(d);}
+  m.appendChild(t);
+  el.trBody.appendChild(m);
+  el.trBody.scrollTop=el.trBody.scrollHeight;
+}
+function removeThinking(){var t=document.getElementById('thinking');if(t)t.remove();}
+
+// ── TTS audio playback ──
+var audioCtx=null;
+function playTtsAudio(base64,format,sampleRate){
+  if(speechSynthesis) speechSynthesis.cancel();
+  if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
+  aiSpeaking=true;
+  el.faceRing.classList.add('pulse');
+  setBars(true);
+  el.caption.style.display='block';
+  el.capWho.textContent='ÀDÙNNÍ · SPEAKING';
+  el.capWho.style.color='var(--lime)';
+  updateUI();
+
+  try{
+    var raw=atob(base64);
+    var buf=new Uint8Array(raw.length);
+    for(var i=0;i<raw.length;i++)buf[i]=raw.charCodeAt(i);
+
+    if(format==='wav'||format==='pcm16'){
+      if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:sampleRate||24000});
+      // For WAV: skip 44-byte header, decode PCM16
+      var offset=format==='wav'?44:0;
+      var samples=new Float32Array((buf.length-offset)/2);
+      for(var j=0;j<samples.length;j++){
+        var s=buf[offset+j*2]|(buf[offset+j*2+1]<<8);
+        if(s&0x8000)s=s-0x10000;
+        samples[j]=s/32768;
+      }
+      var ab=audioCtx.createBuffer(1,samples.length,sampleRate||24000);
+      ab.getChannelData(0).set(samples);
+      var src=audioCtx.createBufferSource();
+      src.buffer=ab;
+      src.connect(audioCtx.destination);
+      src.onended=function(){aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);el.caption.style.display='none';updateUI();};
+      src.start(0);
+    } else {
+      if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+      var blob=new Blob([buf],{type:format||'audio/webm'});
+      var reader=new FileReader();
+      reader.onload=function(){
+        audioCtx.decodeAudioData(reader.result,function(buffer){
+          var src=audioCtx.createBufferSource();
+          src.buffer=buffer;
+          src.connect(audioCtx.destination);
+          src.onended=function(){aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);el.caption.style.display='none';updateUI();};
+          src.start(0);
+        },function(){aiSpeaking=false;updateUI();});
+      };
+      reader.readAsArrayBuffer(blob);
+    }
+  }catch(e){console.error('[audio] error:',e);aiSpeaking=false;updateUI();}
+}
+
+// ── Browser TTS fallback ──
+function speakText(text,lang){
+  if(!speechSynthesis)return;
+  speechSynthesis.cancel();
+  var u=new SpeechSynthesisUtterance(text);
+  var langMap={'en-NG':'en-NG','pcm':'en-NG','yo':'yo-NG','ig':'ig-NG','ha':'ha-NG'};
+  u.lang=langMap[lang]||'en-NG';
+  u.rate=0.95;u.pitch=1.15;
+  var voices=speechSynthesis.getVoices();
+  if(voices.length){
+    var female=['female','samantha','victoria','karen','moira','tessa','fiona','serena','zira','hazel','susan','allison','ava','google uk english female','google us english'];
+    var match=voices.find(function(v){return v.lang===u.lang&&female.some(function(n){return v.name.toLowerCase().indexOf(n)>=0;});});
+    if(!match)match=voices.find(function(v){return v.lang&&v.lang.indexOf(u.lang.split('-')[0])===0&&female.some(function(n){return v.name.toLowerCase().indexOf(n)>=0;});});
+    if(!match)match=voices.find(function(v){return female.some(function(n){return v.name.toLowerCase().indexOf(n)>=0;});});
+    if(!match)match=voices.find(function(v){return v.lang===u.lang;});
+    if(!match)match=voices.find(function(v){return v.lang&&v.lang.indexOf(u.lang.split('-')[0])===0;});
+    if(match)u.voice=match;
+  }
+  u.onend=function(){aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);el.caption.style.display='none';updateUI();};
+  speechSynthesis.speak(u);
+}
+
+// ── Open mic VAD ──
+var VAD_THRESH=0.015, VAD_SPEECH_MIN=3, VAD_SILENCE_STOP=25, VAD_MS=50;
+
+async function startOpenMic(){
+  if(!openMicEnabled||!connected||vadStream)return;
+  try{
+    vadStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,sampleRate:16000,echoCancellation:true,noiseSuppression:true}});
+    var AC=window.AudioContext||window.webkitAudioContext;
+    audioCtx=new AC();
+    var src=audioCtx.createMediaStreamSource(vadStream);
+    vadAnalyser=audioCtx.createAnalyser();
+    vadAnalyser.fftSize=512;vadAnalyser.smoothingTimeConstant=0.5;
+    src.connect(vadAnalyser);
+    vadSpeechFrames=0;vadSilenceFrames=0;vadIsSpeaking=false;
+    console.log('[open-mic] VAD started');
+    vadInterval=setInterval(vadCheck,VAD_MS);
+    updateUI();
+  }catch(e){console.error('[open-mic] error:',e);}
+}
+
+function stopOpenMic(){
+  if(vadInterval){clearInterval(vadInterval);vadInterval=null;}
+  if(vadStream){vadStream.getTracks().forEach(function(t){t.stop();});vadStream=null;}
+  if(audioCtx){try{audioCtx.close();}catch(e){}audioCtx=null;}
+  vadAnalyser=null;vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;
+  updateUI();
+}
+
+function vadCheck(){
+  if(!vadAnalyser||!connected)return;
+  if(aiSpeaking||transcribing){if(vadIsSpeaking){vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;}return;}
+  var buf=new Float32Array(vadAnalyser.fftSize);
+  vadAnalyser.getFloatTimeDomainData(buf);
+  var sum=0;for(var i=0;i<buf.length;i++)sum+=buf[i]*buf[i];
+  var rms=Math.sqrt(sum/buf.length);
+  if(rms>VAD_THRESH){
+    vadSpeechFrames++;vadSilenceFrames=0;
+    if(vadSpeechFrames>=VAD_SPEECH_MIN&&!vadIsSpeaking){vadIsSpeaking=true;console.log('[open-mic] speech detected');startVadRec();}
+  }else if(vadIsSpeaking){
+    vadSilenceFrames++;
+    if(vadSilenceFrames>=VAD_SILENCE_STOP){console.log('[open-mic] end of speech');vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;stopVadRec();}
+  }
+}
+
+async function startVadRec(){
+  if(isRecording)return;
+  try{
+    var mt='audio/webm;codecs=opus';
+    if(!MediaRecorder.isTypeSupported(mt)){mt='audio/webm';if(!MediaRecorder.isTypeSupported(mt)){mt='';}}
+    audioChunks=[];
+    mediaRecorder=mt?new MediaRecorder(vadStream,{mimeType:mt}):new MediaRecorder(vadStream);
+    mediaRecorder.ondataavailable=function(e){if(e.data&&e.data.size>0)audioChunks.push(e.data);};
+    mediaRecorder.onstop=function(){
+      if(audioChunks.length>0){
+        var blob=new Blob(audioChunks,{type:mediaRecorder.mimeType||'audio/webm'});
+        if(blob.size<200){audioChunks=[];return;}
+        var r=new FileReader();
+        r.onload=function(){
+          var b64=arrayBufferToBase64(r.result);
+          if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:'audio',audioBase64:b64,encoding:'webm',isFinal:true}));}
+          transcribing=true;updateUI();
+        };
+        r.readAsArrayBuffer(blob);
+      }
+      audioChunks=[];
+    };
+    mediaRecorder.start(100);isRecording=true;updateUI();
+  }catch(e){console.error('[open-mic] rec error:',e);}
+}
+
+function stopVadRec(){
+  if(!isRecording||!mediaRecorder)return;
+  isRecording=false;
+  if(mediaRecorder.state!=='inactive')mediaRecorder.stop();
+  updateUI();
+}
+
+function toggleMic(){
+  if(openMicEnabled&&connected){
+    if(vadInterval){if(isRecording)stopVadRec();stopOpenMic();setConn('off','MUTED');}
+    else{setConn('on','CONNECTED');startOpenMic();}
+    updateUI();
+  }
+}
+
+function arrayBufferToBase64(buffer){
+  var binary='';var bytes=new Uint8Array(buffer);
+  for(var i=0;i<bytes.length;i++)binary+=String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function updateUI(){
+  el.micBtn.className=vadInterval?'mic on':'mic off';
+  el.micBtn.style.color=vadInterval?'var(--ink)':'var(--dim)';
+}
+
+// ── Start call ──
+async function startCall(){
+  el.startBtn.disabled=true;
+  el.idleErr.style.display='none';
+  try{
+    setConn('wait','AUTHENTICATING…');
+    var ar=await fetch(API_BASE+'/v1/auth/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId:'savanna-bank'})});
+    if(!ar.ok)throw new Error('Auth failed ('+ar.status+')');
+    var ad=await ar.json();var jwt=ad.token;
+
+    setConn('wait','CREATING SESSION…');
+    var sr=await fetch(API_BASE+'/v1/sessions',{method:'POST',headers:{'Authorization':'Bearer '+jwt,'Content-Type':'application/json'},body:JSON.stringify({clientId:'savanna-bank'})});
+    if(!sr.ok)throw new Error('Session failed');
+    var sd=await sr.json();var sid=sd.sessionId;var st=sd.streamToken;
+
+    // Try video
+    try{
+      var vr=await fetch(API_BASE+'/v1/video/conversation',{method:'POST',headers:{'Authorization':'Bearer '+jwt,'Content-Type':'application/json'},body:JSON.stringify({sessionId:sid})});
+      if(vr.ok){var vd=await vr.json();videoConversation={conversationId:vd.conversationId,conversationUrl:vd.conversationUrl};}
+    }catch(e){console.warn('Video failed:',e);videoConversation=null;}
+
+    setConn('wait','CONNECTING…');
+    var wsUrl=WS_BASE+'/v1/sessions/'+sid+'/stream?token='+st;
+    ws=new WebSocket(wsUrl);
+
+    ws.onopen=function(){
+      connected=true;setConn('on','CONNECTED');
+      el.idle.style.display='none';
+      el.controls.style.display='flex';
+      if(videoConversation&&ws.readyState===WebSocket.OPEN){
+        ws.send(JSON.stringify({type:'video',conversationId:videoConversation.conversationId,conversationUrl:videoConversation.conversationUrl}));
+      }
+      if(videoConversation&&videoConversation.conversationUrl){joinVideo(videoConversation.conversationUrl);}
+      if(openMicEnabled)setTimeout(startOpenMic,300);
+    };
+
+    ws.onmessage=function(e){handleMsg(JSON.parse(e.data));};
+    ws.onerror=function(){setConn('off','ERROR');};
+    ws.onclose=function(){
+      connected=false;aiSpeaking=false;transcribing=false;
+      if(isRecording)stopVadRec();stopOpenMic();
+      if(videoCall){try{videoCall.destroy();}catch(e){}videoCall=null;}
+      setConn('off','OFFLINE');
+      el.idle.style.display='flex';
+      el.controls.style.display='none';
+      el.startBtn.disabled=false;el.startBtn.textContent='▶ START LIVE CALL';
+    };
+  }catch(e){
+    console.error('Start error:',e);
+    setConn('off','ERROR');
+    el.idleErr.textContent=e.message||'Failed to connect.';
+    el.idleErr.style.display='block';
+    el.startBtn.disabled=false;
+  }
+}
+
+function joinVideo(url){
+  if(typeof Daily!=='undefined'){
+    videoCall=Daily.createFrame(el.faceVideo.parentElement,{showLeaveButton:false,showFullscreenButton:false,showLocalVideo:false});
+    videoCall.join({url:url});
+    el.faceVideo.classList.add('active');
+    el.faceImg.style.display='none';
+  }
+}
+
+function handleMsg(msg){
+  if(msg.type==='transcript'){
+    var t=msg.turn;
+    if(t.speaker==='ai'){
+      aiSpeaking=true;
+      removeThinking();
+      addTurn('ai',t.text,t.language,t.englishTranslation);
+      el.caption.style.display='block';
+      el.capWho.textContent='ÀDÙNNÍ · SPEAKING';
+      el.capWho.style.color='var(--lime)';
+      el.capLang.textContent=t.language?(LANG_NAMES[t.language]||t.language):'';
+      el.capText.textContent=t.text;
+      renderLangs(t.language?[t.language]:[]);
+      el.faceRing.classList.add('pulse');setBars(true);
+      if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
+      if(!videoConversation&&speechSynthesis){
+        aiSpeechFallbackTimer=setTimeout(function(){aiSpeechFallbackTimer=null;if(aiSpeaking)speakText(t.text,t.language);},8000);
+      }
+      updateUI();
+    }else{
+      aiSpeaking=false;userSpeaking=false;removeThinking();
+      addTurn('user',t.text,t.language,t.englishTranslation);
+      el.caption.style.display='block';
+      el.capWho.textContent='YOU · SPEAKING';
+      el.capWho.style.color='#D9C08F';
+      el.capLang.textContent=t.language?(LANG_NAMES[t.language]||t.language):'';
+      el.capText.textContent=t.text;
+      renderLangs(t.language?[t.language]:[]);
+      el.faceRing.classList.remove('pulse');setBars(false);
+      addThinking();
+      updateUI();
+    }
+  }else if(msg.type==='audio'){
+    if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
+    if(speechSynthesis)speechSynthesis.cancel();
+    if(msg.audioBase64){playTtsAudio(msg.audioBase64,msg.format,msg.sampleRate);}
+    else{aiSpeaking=false;updateUI();}
+  }else if(msg.type==='transcribing'){
+    transcribing=true;updateUI();
+  }else if(msg.type==='turn.complete'){
+    transcribing=false;updateUI();
+  }else if(msg.type==='session.ended'){
+    connected=false;setConn('off','CALL ENDED');updateUI();
+    el.idle.style.display='flex';el.controls.style.display='none';
+    el.startBtn.disabled=false;el.startBtn.textContent='▶ START NEW CALL';
+  }else if(msg.type==='error'){
+    console.error('[ws] error:',msg.message);
+  }
+}
+
+function endCall(){
+  if(isRecording)stopVadRec();stopOpenMic();
+  if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
+  if(speechSynthesis)speechSynthesis.cancel();
+  if(videoCall){try{videoCall.destroy();}catch(e){}videoCall=null;}
+  if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'end'}));
+  if(ws)ws.close();
+}
+
+// Preload voices
+if(speechSynthesis){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=function(){speechSynthesis.getVoices();};}
+</script>
+</body>
+</html>
