@@ -23,7 +23,7 @@ export class TavusClient {
     this.apiKey = apiKey;
   }
 
-  async createEchoPal(palName = 'Adunni Echo', faceId = 'r38a383b0173'): Promise<TavusPal> {
+  async createEchoPal(palName = 'Adunni Echo', faceId = 'rf4e9d9790f0'): Promise<TavusPal> {
     const resp = await fetch(`${TAVUS_API_BASE}/pals`, {
       method: 'POST',
       headers: {
@@ -149,7 +149,7 @@ export class TavusClient {
     return data.data ?? [];
   }
 
-  async getOrCreateEchoPal(palName = 'Adunni Echo', faceId = 'r38a383b0173'): Promise<TavusPal> {
+  async getOrCreateEchoPal(palName = 'Adunni Echo', faceId = 'rf4e9d9790f0'): Promise<TavusPal> {
     const pals = await this.getPals();
     const existing = pals.find(p => p.pipeline_mode === 'echo' && p.pal_name === palName);
     if (existing) {

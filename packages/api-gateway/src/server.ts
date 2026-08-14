@@ -1078,31 +1078,50 @@ async function processUserUtteranceWithLanguage(
     turn: { speaker: 'ai', language: aiLanguage, text: aiTextTranslated, confidence: orchResult.confidence, englishTranslation: needsAiTranslation ? aiText : undefined },
   }));
 
-  // Send AI response to video face as echo — face will speak with lip-sync
-  if (videoConversation && tavus) {
+  // ── TTS: synthesize AI response as real audio ──
+  // STORM TTS generates Nigerian female voice audio (Morenike/Amina).
+  // - When video is active: send audio to Tavus as audio echo for lip-sync
+  // - When no video: send audio to frontend for playback
+  // - If STORM TTS fails: fall back to text echo (video) or browser SpeechSynthesis (no video)
+  if (config && stormTts) {
+    try {
+      const ttsResult = await stormTts.generate(aiTextTranslated, aiLanguage);
+      const audioBase64 = ttsResult.audio.toString('base64');
+
+      if (videoConversation && tavus) {
+        // Send STORM TTS audio to Tavus as audio echo — face lip-syncs to our Nigerian female voice
+        tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, '', {
+          audio: audioBase64,
+          sampleRate: ttsResult.sampleRate,
+          inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
+          done: true,
+        }).catch((e: Error) => console.error('[gateway] video audio echo (ai) error:', e));
+      } else {
+        // No video — send audio to frontend for playback
+        ws.send(JSON.stringify({
+          type: 'audio',
+          audioBase64,
+          format: ttsResult.format,
+          sampleRate: ttsResult.sampleRate,
+        }));
+      }
+    } catch (err) {
+      console.error('[gateway] STORM TTS error:', err instanceof Error ? err.message : err);
+      // Fall back: send text echo to Tavus (Tavus generates its own TTS)
+      if (videoConversation && tavus) {
+        tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiTextTranslated, {
+          inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
+          done: true,
+        }).catch((e: Error) => console.error('[gateway] video text echo (ai) fallback error:', e));
+      }
+      // Frontend will fall back to browser SpeechSynthesis
+    }
+  } else if (videoConversation && tavus) {
+    // No STORM TTS configured — send text echo to Tavus
     tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiTextTranslated, {
       inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
       done: true,
     }).catch((e: Error) => console.error('[gateway] video echo (ai) error:', e));
-  }
-
-  // ── TTS: synthesize AI response as real audio ──
-  // When video is active, Tavus echo handles speech-to-speech (face speaks with lip-sync).
-  // When no video, use STORM TTS (Nigerian multilingual, female voices) if available.
-  // If STORM TTS fails, the frontend falls back to browser SpeechSynthesis.
-  if (config && !videoConversation && stormTts) {
-    try {
-      const ttsResult = await stormTts.generate(aiTextTranslated, aiLanguage);
-      ws.send(JSON.stringify({
-        type: 'audio',
-        audioBase64: ttsResult.audio.toString('base64'),
-        format: ttsResult.format,
-        sampleRate: ttsResult.sampleRate,
-      }));
-    } catch (err) {
-      // STORM TTS failed — don't send audio, let browser handle TTS
-      console.error('[gateway] TTS error (browser will handle):', err instanceof Error ? err.message : err);
-    }
   }
 
   ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: currentTurnIndex + 1 }));
