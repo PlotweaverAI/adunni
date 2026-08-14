@@ -899,6 +899,7 @@
   }
 
   // ── Web Speech API: SpeechSynthesis (browser-native TTS) ──
+  // Adunni is female — always use a female voice with appropriate accent
   function speakText(text, language) {
     if (!speechSynthesis) return;
 
@@ -910,23 +911,71 @@
 
     // Map language codes to BCP-47 for SpeechSynthesis
     var langMap = {
-      'en-NG': 'en-US',
-      'pcm': 'en-US',
-      'yo': 'yo',
-      'ig': 'ig',
-      'ha': 'ha'
+      'en-NG': 'en-NG',
+      'pcm': 'en-NG',
+      'yo': 'yo-NG',
+      'ig': 'ig-NG',
+      'ha': 'ha-NG'
     };
-    utterance.lang = langMap[language] || 'en-US';
+    utterance.lang = langMap[language] || 'en-NG';
     utterance.rate = 0.95;
-    utterance.pitch = 1.0;
+    utterance.pitch = 1.15; // Higher pitch = female voice
 
-    // Try to find a matching voice
+    // Try to find a FEMALE voice matching the language
     var voices = speechSynthesis.getVoices();
     if (voices && voices.length > 0) {
-      var match = voices.find(function(v) { return v.lang === utterance.lang; });
+      // Female voice keywords (common in browser voice names)
+      var femaleNames = ['female', 'woman', 'samantha', 'victoria', 'karen', 'moira', 'tessa',
+                         'fiona', 'serena', 'zira', 'hazel', 'susan', 'allison', 'ava',
+                         'google uk english female', 'google us english', 'adaeze', 'amina',
+                         'nneka', 'fatima', 'chioma'];
+
+      // 1. Try exact language match + female
+      var match = voices.find(function(v) {
+        return v.lang === utterance.lang && femaleNames.some(function(n) {
+          return v.name.toLowerCase().indexOf(n) >= 0;
+        });
+      });
+
+      // 2. Try language prefix match + female
       if (!match) {
-        match = voices.find(function(v) { return v.lang && v.lang.indexOf(utterance.lang.split('-')[0]) === 0; });
+        var prefix = utterance.lang.split('-')[0];
+        match = voices.find(function(v) {
+          return v.lang && v.lang.indexOf(prefix) === 0 && femaleNames.some(function(n) {
+            return v.name.toLowerCase().indexOf(n) >= 0;
+          });
+        });
       }
+
+      // 3. Try English (Nigerian) female voice
+      if (!match && language !== 'en-NG' && language !== 'pcm') {
+        match = voices.find(function(v) {
+          return v.lang && v.lang.indexOf('en') === 0 && femaleNames.some(function(n) {
+            return v.name.toLowerCase().indexOf(n) >= 0;
+          });
+        });
+      }
+
+      // 4. Try any female voice
+      if (!match) {
+        match = voices.find(function(v) {
+          return femaleNames.some(function(n) {
+            return v.name.toLowerCase().indexOf(n) >= 0;
+          });
+        });
+      }
+
+      // 5. Fall back to exact language match (any gender)
+      if (!match) {
+        match = voices.find(function(v) { return v.lang === utterance.lang; });
+      }
+
+      // 6. Fall back to language prefix match (any gender)
+      if (!match) {
+        var p = utterance.lang.split('-')[0];
+        match = voices.find(function(v) { return v.lang && v.lang.indexOf(p) === 0; });
+      }
+
       if (match) utterance.voice = match;
     }
 
@@ -974,16 +1023,16 @@
           aiSpeechFallbackTimer = null;
         }
 
-        // Prefer real TTS audio when available. If it never arrives, fall back to browser speech.
+        // Browser SpeechSynthesis is the primary TTS (female voice, language-aware).
+        // If server TTS audio arrives, it will cancel browser speech and play instead.
         if (!videoConversation && speechSynthesis) {
-          if (!window._stormTtsActive) {
-            speakText(turn.text, turn.language);
-          } else {
-            aiSpeechFallbackTimer = setTimeout(function() {
-              aiSpeechFallbackTimer = null;
-              if (aiSpeaking) speakText(turn.text, turn.language);
-            }, 1800);
-          }
+          // Small delay to allow server TTS audio to arrive first (avoids double voice)
+          aiSpeechFallbackTimer = setTimeout(function() {
+            aiSpeechFallbackTimer = null;
+            if (aiSpeaking) {
+              speakText(turn.text, turn.language);
+            }
+          }, 300);
         }
 
         updateUI();
@@ -1219,11 +1268,11 @@
     // Fetch client config from backend
     fetchClientConfig();
 
-    // Check if STORM TTS is available (determines Web Speech API fallback behavior)
+    // Check TTS status — browser SpeechSynthesis is primary, server TTS is secondary
     try {
       var ttsStatusResp = await fetch(API_BASE + '/v1/tts/status');
       var ttsStatus = await ttsStatusResp.json();
-      window._stormTtsActive = ttsStatus.available === true && ttsStatus.provider === 'storm-tts';
+      window._stormTtsActive = false; // Browser TTS is primary now
     } catch (e) {
       window._stormTtsActive = false;
     }

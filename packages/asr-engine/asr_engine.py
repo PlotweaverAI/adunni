@@ -207,12 +207,12 @@ def detect_language_from_text(text: str) -> dict:
     words = set(re.split(r'[\s,.;:!?\'"\-()]+', lower))
     words = {w for w in words if w}
 
-    # Pidgin catchphrase override: if any Pidgin marker is present, it's Pidgin
+    # Pidgin catchphrase override: if any Pidgin marker is present as a whole word, it's Pidgin
     PCM_MARKERS = ["abeg", "dey", "wan", "wahala", "naija", "wetin", "sabi",
                    "howfar", "watin", "oga", "madam", "broda", "sista", "pikin",
                    "wey", "gos", "beta", "chop"]
     for marker in PCM_MARKERS:
-        if marker in lower:
+        if marker in words:
             return {"language": "pcm", "confidence": 0.95}
 
     scores = {lang: 0 for lang in LANGUAGE_KEYWORDS}
@@ -221,10 +221,12 @@ def detect_language_from_text(text: str) -> dict:
         for kw in keywords:
             kw_lower = kw.lower()
             if len(kw_lower) <= 3:
+                # Short keywords: match as whole words only
                 if kw_lower in words:
                     scores[lang] += 1
             else:
-                if kw_lower in lower:
+                # Long keywords: match as whole words to avoid false substring matches
+                if kw_lower in words:
                     scores[lang] += 1
 
     best_lang = max(scores, key=scores.get)
@@ -256,6 +258,18 @@ def _transcribe_with_language(audio_path: str, language: str) -> str:
             "forced_decoder_ids": forced_decoder_ids,
             "max_new_tokens": 225,
         },
+    )
+    return _clean_transcript(result["text"])
+
+
+def _transcribe_auto(audio_path: str) -> str:
+    """Transcribe without forcing a language — let Whisper auto-detect.
+    Faster than two-pass since it's a single inference.
+    """
+    pipeline, _ = _load_asr_pipeline()
+    result = pipeline(
+        audio_path,
+        generate_kwargs={"max_new_tokens": 225},
     )
     return _clean_transcript(result["text"])
 
@@ -323,29 +337,23 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
             "confidence": detected["confidence"],
         }
 
-    # Language unknown — two-pass: acoustic detect → transcribe with detected language
-    log.info("Two-pass ASR: language unknown, detecting language acoustically")
-    try:
-        detected_lang = _detect_language_acoustic(audio_path)
-    except Exception as e:
-        log.warning(f"Acoustic detection failed: {e}, falling back to English")
-        detected_lang = "en-NG"
+    # Language unknown — single pass with no forced language (let Whisper auto-detect)
+    # This is faster than two-pass (1 inference instead of 2-3) and the model's
+    # auto-detection is good enough for most cases. Keyword detection refines the result.
+    log.info("ASR: language unknown, transcribing with auto-detection")
+    text = _transcribe_auto(audio_path)
 
-    log.info(f"Two-pass ASR: acoustic detection → {detected_lang}")
+    # Detect language from the transcribed text using keyword matching
+    text_detected = detect_language_from_text(text) if text else {"language": "en-NG", "confidence": 0.5}
+    detected_lang = text_detected["language"]
 
-    # Transcribe with the acoustically detected language forced
-    text = _transcribe_with_language(audio_path, detected_lang)
-
-    # Also run keyword detection on the result to refine (in case acoustic was wrong)
-    text_detected = detect_language_from_text(text) if text else {"language": detected_lang, "confidence": 0.5}
-
-    # If keyword detection disagrees and has high confidence, re-transcribe
-    if text_detected["language"] != detected_lang and text_detected["confidence"] > 0.7:
-        log.info(f"Two-pass ASR: keyword detection disagrees ({text_detected['language']}), re-transcribing")
-        text2 = _transcribe_with_language(audio_path, text_detected["language"])
-        if text2 and len(text2) > len(text) * 0.5:
+    # If keyword detection suggests a different language with high confidence,
+    # re-transcribe with that language forced (only one extra pass)
+    if detected_lang != "en-NG" and text_detected["confidence"] > 0.6:
+        log.info(f"ASR: keyword detected {detected_lang} (conf={text_detected['confidence']:.2f}), re-transcribing with forced language")
+        text2 = _transcribe_with_language(audio_path, detected_lang)
+        if text2 and len(text2) >= len(text) * 0.3:
             text = text2
-            detected_lang = text_detected["language"]
 
     final_detected = detect_language_from_text(text) if text else {"language": detected_lang, "confidence": 0.5}
 

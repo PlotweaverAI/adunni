@@ -65,7 +65,6 @@ const STORM_TTS_API_KEY = process.env.STORM_TTS_API_KEY ?? '';
 const stormTts = STORM_TTS_API_KEY ? new StormTtsClient(STORM_TTS_API_KEY, STORM_TTS_URL) : null;
 
 const ASR_SERVICE_URL = process.env.ASR_SERVICE_URL ?? 'http://localhost:3001';
-const TTS_SERVICE_URL = process.env.TTS_SERVICE_URL ?? 'http://localhost:3002';
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? 'http://localhost:3003';
 const ACTION_EXECUTOR_URL = process.env.ACTION_EXECUTOR_URL ?? 'http://localhost:3004';
 const CONFIG_SERVICE_URL = process.env.CONFIG_SERVICE_URL ?? 'http://localhost:3005';
@@ -581,9 +580,11 @@ app.get('/v1/video/status', (_req, res) => {
 
 // ── GET /v1/tts/status — Check if TTS is available ──
 app.get('/v1/tts/status', (_req, res) => {
+  // Browser SpeechSynthesis is the primary TTS (female voice, language-aware)
+  // STORM TTS is used as a secondary option when available
   res.json({
-    available: !!stormTts,
-    provider: stormTts ? 'storm-tts' : 'mock',
+    available: true,
+    provider: 'browser-tts',
     languages: ['yo', 'ha', 'ig', 'pcm', 'en-NG'],
   });
 });
@@ -1089,70 +1090,25 @@ async function processUserUtteranceWithLanguage(
 
   // ── TTS: synthesize AI response as real audio ──
   // When video is active, Tavus echo handles speech-to-speech (face speaks with lip-sync).
-  // When no video, use STORM TTS (Nigerian multilingual) if available, else fall back to mock TTS.
-  if (config && !videoConversation) {
-    if (stormTts) {
-      try {
-        const ttsResult = await stormTts.generate(aiTextTranslated, aiLanguage);
-        ws.send(JSON.stringify({
-          type: 'audio',
-          audioBase64: ttsResult.audio.toString('base64'),
-          format: ttsResult.format,
-          sampleRate: ttsResult.sampleRate,
-        }));
-      } catch (err) {
-        console.error('[gateway] STORM TTS error:', err);
-        // Fall back to mock TTS
-        try {
-          const ttsResp = await fetch(`${TTS_SERVICE_URL}/synthesize`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              text: aiTextTranslated,
-              language: aiLanguage,
-              voicePersona: config.voicePersona,
-              sessionId,
-              turnId: `turn-${currentTurnIndex + 1}`,
-            }),
-          });
-          if (ttsResp.ok) {
-            const ttsResult = await ttsResp.json() as { audioBase64: string; format: string; sampleRate: number };
-            ws.send(JSON.stringify({
-              type: 'audio',
-              audioBase64: ttsResult.audioBase64,
-              format: ttsResult.format,
-              sampleRate: ttsResult.sampleRate,
-            }));
-          }
-        } catch (fallbackErr) {
-          console.error('[gateway] TTS fallback error:', fallbackErr);
-        }
-      }
-    } else {
-      try {
-        const ttsResp = await fetch(`${TTS_SERVICE_URL}/synthesize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: aiTextTranslated,
-            language: aiLanguage,
-            voicePersona: config.voicePersona,
-            sessionId,
-            turnId: `turn-${currentTurnIndex + 1}`,
-          }),
-        });
-        if (ttsResp.ok) {
-          const ttsResult = await ttsResp.json() as { audioBase64: string; format: string; sampleRate: number };
-          ws.send(JSON.stringify({
-            type: 'audio',
-            audioBase64: ttsResult.audioBase64,
-            format: ttsResult.format,
-            sampleRate: ttsResult.sampleRate,
-          }));
-        }
-      } catch (err) {
-        console.error('[gateway] TTS error:', err);
-      }
+  // When no video, use STORM TTS (Nigerian multilingual) if available with a short timeout.
+  // If STORM TTS is unavailable or times out, the frontend falls back to browser SpeechSynthesis
+  // (female voice with language-appropriate accent).
+  if (config && !videoConversation && stormTts) {
+    try {
+      // Use a 5s timeout — if STORM TTS is slow, let browser handle it instead
+      const ttsResult = await Promise.race([
+        stormTts.generate(aiTextTranslated, aiLanguage),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 5000)),
+      ]);
+      ws.send(JSON.stringify({
+        type: 'audio',
+        audioBase64: ttsResult.audio.toString('base64'),
+        format: ttsResult.format,
+        sampleRate: ttsResult.sampleRate,
+      }));
+    } catch (err) {
+      // STORM TTS failed or timed out — don't send audio, let browser handle TTS
+      console.error('[gateway] TTS error (browser will handle):', err instanceof Error ? err.message : err);
     }
   }
 
