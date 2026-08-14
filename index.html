@@ -331,6 +331,16 @@
   var audioContext = null;
   var transcribing = false;
 
+  // ── Open mic / VAD state ──
+  var openMicEnabled = true; // Auto-record mode (no button press needed)
+  var vadStream = null; // persistent mic stream for open-mic
+  var vadAnalyser = null; // AudioContext analyser for VAD
+  var vadInterval = null; // setInterval for VAD checking
+  var vadSpeechFrames = 0; // consecutive frames with speech detected
+  var vadSilenceFrames = 0; // consecutive frames with silence detected
+  var vadIsSpeaking = false; // currently detecting speech
+  var vadRampBuffer = []; // audio chunks collected during speech
+
   // ── Web Speech API state ──
   var speechRecognition = null;
   var speechSynthesis = window.speechSynthesis || null;
@@ -476,8 +486,14 @@
     el.avatarRing.className = aiSpeaking ? 'avatar-ring-pulse' : 'avatar-ring-static';
     renderWaveform(aiSpeaking, true);
 
-    // Mic button state
-    if (isRecording) {
+    // Mic button state — in open-mic mode, shows mute/unmute
+    if (openMicEnabled && connected) {
+      if (vadInterval) {
+        el.micBtn.className = 'mic-btn-active'; // mic is on (listening)
+      } else {
+        el.micBtn.className = 'mic-btn-idle'; // mic is muted
+      }
+    } else if (isRecording) {
       el.micBtn.className = 'mic-btn-active';
     } else {
       el.micBtn.className = 'mic-btn-idle';
@@ -486,8 +502,13 @@
     if (userSpeaking || isRecording) {
       el.userTileInner.classList.add('speaking');
       el.userTileLabel.classList.add('speaking');
-      el.userTileLabel.textContent = isRecording ? 'YOU · RECORDING' : 'YOU · SPEAKING';
+      el.userTileLabel.textContent = isRecording ? 'YOU · SPEAKING' : 'YOU · SPEAKING';
       el.userTileWf.style.display = 'flex';
+    } else if (openMicEnabled && connected && vadInterval && !aiSpeaking && !transcribing) {
+      el.userTileInner.classList.remove('speaking');
+      el.userTileLabel.classList.remove('speaking');
+      el.userTileLabel.textContent = 'YOU · LISTENING';
+      el.userTileWf.style.display = 'none';
     } else {
       el.userTileInner.classList.remove('speaking');
       el.userTileLabel.classList.remove('speaking');
@@ -623,6 +644,11 @@
 
         updateUI();
         el.msgInput.focus();
+
+        // Auto-start open mic for seamless conversation
+        if (openMicEnabled) {
+          setTimeout(startOpenMic, 500);
+        }
       };
 
       ws.onmessage = function(event) {
@@ -644,6 +670,7 @@
           aiSpeechFallbackTimer = null;
         }
         if (isRecording) stopRecording();
+        stopOpenMic();
         leaveVideoRoom();
         setConnStatus('disconnected', 'OFFLINE');
         updateUI();
@@ -819,11 +846,204 @@
   }
 
   function toggleRecording() {
+    if (openMicEnabled && connected) {
+      // In open-mic mode, the button mutes/unmutes the VAD
+      if (vadInterval) {
+        // Mute: stop VAD and any ongoing recording
+        if (isRecording) stopVadRecording();
+        stopOpenMic();
+        setConnStatus('connected', 'MUTED');
+        console.log('[open-mic] Muted by user');
+      } else {
+        // Unmute: restart VAD
+        setConnStatus('connected', 'CONNECTED');
+        startOpenMic();
+        console.log('[open-mic] Unmuted by user');
+      }
+      updateUI();
+      return;
+    }
+    // Manual push-to-talk fallback
     if (isRecording) {
       stopRecording();
     } else {
       startRecording();
     }
+  }
+
+  // ── Open Mic: VAD-based auto recording ──
+  // Instead of push-to-talk, the mic stays open and VAD detects speech.
+  // When the user pauses (silence after speech), audio is sent automatically.
+
+  var VAD_SPEECH_THRESHOLD = 0.015;  // RMS threshold for speech
+  var VAD_SPEECH_FRAMES_MIN = 3;     // frames needed to start speech (~150ms)
+  var VAD_SILENCE_FRAMES_STOP = 25;  // frames of silence to end speech (~1.2s)
+  var VAD_FRAME_MS = 50;             // check every 50ms
+
+  async function startOpenMic() {
+    if (!openMicEnabled || !connected) return;
+    if (vadStream) return; // already running
+
+    try {
+      vadStream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
+      });
+
+      // Set up AudioContext for VAD
+      var AudioCtx = window.AudioContext || window.webkitAudioContext;
+      audioContext = new AudioCtx();
+      var source = audioContext.createMediaStreamSource(vadStream);
+      vadAnalyser = audioContext.createAnalyser();
+      vadAnalyser.fftSize = 512;
+      vadAnalyser.smoothingTimeConstant = 0.5;
+      source.connect(vadAnalyser);
+
+      vadSpeechFrames = 0;
+      vadSilenceFrames = 0;
+      vadIsSpeaking = false;
+      vadRampBuffer = [];
+
+      console.log('[open-mic] VAD started, listening for speech');
+
+      vadInterval = setInterval(vadCheck, VAD_FRAME_MS);
+    } catch (err) {
+      console.error('[open-mic] Failed to start:', err);
+    }
+  }
+
+  function stopOpenMic() {
+    if (vadInterval) {
+      clearInterval(vadInterval);
+      vadInterval = null;
+    }
+    if (vadStream) {
+      vadStream.getTracks().forEach(function(t) { t.stop(); });
+      vadStream = null;
+    }
+    if (audioContext) {
+      try { audioContext.close(); } catch(e) {}
+      audioContext = null;
+    }
+    vadAnalyser = null;
+    vadIsSpeaking = false;
+    vadSpeechFrames = 0;
+    vadSilenceFrames = 0;
+    vadRampBuffer = [];
+    console.log('[open-mic] VAD stopped');
+  }
+
+  function vadCheck() {
+    if (!vadAnalyser || !connected) return;
+    if (aiSpeaking || transcribing) {
+      // Don't detect speech while AI is speaking or transcribing
+      if (vadIsSpeaking) {
+        vadIsSpeaking = false;
+        vadSpeechFrames = 0;
+        vadSilenceFrames = 0;
+      }
+      return;
+    }
+
+    // Compute RMS energy
+    var buffer = new Float32Array(vadAnalyser.fftSize);
+    vadAnalyser.getFloatTimeDomainData(buffer);
+    var sum = 0;
+    for (var i = 0; i < buffer.length; i++) {
+      sum += buffer[i] * buffer[i];
+    }
+    var rms = Math.sqrt(sum / buffer.length);
+
+    if (rms > VAD_SPEECH_THRESHOLD) {
+      vadSpeechFrames++;
+      vadSilenceFrames = 0;
+      if (vadSpeechFrames >= VAD_SPEECH_FRAMES_MIN && !vadIsSpeaking) {
+        vadIsSpeaking = true;
+        console.log('[open-mic] Speech detected (rms=' + rms.toFixed(4) + ')');
+        startVadRecording();
+      }
+    } else {
+      if (vadIsSpeaking) {
+        vadSilenceFrames++;
+        if (vadSilenceFrames >= VAD_SILENCE_FRAMES_STOP) {
+          console.log('[open-mic] End of speech detected (silence=' + vadSilenceFrames + ' frames)');
+          vadIsSpeaking = false;
+          vadSpeechFrames = 0;
+          vadSilenceFrames = 0;
+          stopVadRecording();
+        }
+      }
+    }
+  }
+
+  async function startVadRecording() {
+    if (isRecording) return; // already recording
+
+    try {
+      // Reuse the VAD stream for recording
+      var mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'audio/ogg;codecs=opus';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = '';
+          }
+        }
+      }
+
+      audioChunks = [];
+      mediaRecorder = mimeType
+        ? new MediaRecorder(vadStream, { mimeType: mimeType })
+        : new MediaRecorder(vadStream);
+
+      mediaRecorder.ondataavailable = function(event) {
+        if (event.data && event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = function() {
+        if (audioChunks.length > 0) {
+          var blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+          if (blob.size < 200) {
+            console.warn('[open-mic] Audio too short (' + blob.size + ' bytes), skipping');
+            audioChunks = [];
+            return;
+          }
+          var reader = new FileReader();
+          reader.onload = function() {
+            var base64 = arrayBufferToBase64(reader.result);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'audio',
+                audioBase64: base64,
+                encoding: 'webm',
+                isFinal: true
+              }));
+            }
+            transcribing = true;
+            updateUI();
+          };
+          reader.readAsArrayBuffer(blob);
+        }
+        audioChunks = [];
+      };
+
+      mediaRecorder.start(100);
+      isRecording = true;
+      updateUI();
+    } catch (err) {
+      console.error('[open-mic] Recording start error:', err);
+    }
+  }
+
+  function stopVadRecording() {
+    if (!isRecording || !mediaRecorder) return;
+    isRecording = false;
+    if (mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+    updateUI();
   }
 
   // ── Convert ArrayBuffer to base64 ──
@@ -1139,7 +1359,8 @@
       updateUI();
 
     } else if (msg.type === 'turn.complete') {
-      // Turn completed
+      // Turn completed — reset transcribing state so open mic can resume
+      transcribing = false;
       updateUI();
 
     } else if (msg.type === 'video.ready') {
@@ -1172,6 +1393,7 @@
   // ── End the call ──
   function endCall() {
     if (isRecording) stopRecording();
+    stopOpenMic();
     if (aiSpeechFallbackTimer) {
       clearTimeout(aiSpeechFallbackTimer);
       aiSpeechFallbackTimer = null;
