@@ -923,8 +923,9 @@
         var activeLangs = turn.language ? [turn.language] : [];
         renderLangChips(activeLangs);
 
-        // Speak the AI response using Web Speech API when no video face is active
-        if (!videoConversation && speechSynthesis) {
+        // Speak the AI response using Web Speech API only as fallback
+        // (if STORM TTS is available, real audio will arrive as an 'audio' message)
+        if (!videoConversation && speechSynthesis && !window._stormTtsActive) {
           speakText(turn.text, turn.language);
         }
 
@@ -970,6 +971,8 @@
 
     } else if (msg.type === 'audio') {
       // TTS audio response from AI — play it
+      // Cancel browser SpeechSynthesis since we have real audio
+      if (speechSynthesis) speechSynthesis.cancel();
       if (msg.audioBase64) {
         playTtsAudio(msg.audioBase64, msg.format, msg.sampleRate);
       }
@@ -1090,7 +1093,7 @@
   }
 
   // ── Init ──
-  function init() {
+  async function init() {
     cacheDOM();
 
     // Initial render
@@ -1100,6 +1103,15 @@
 
     // Fetch client config from backend
     fetchClientConfig();
+
+    // Check if STORM TTS is available (determines Web Speech API fallback behavior)
+    try {
+      var ttsStatusResp = await fetch(API_BASE + '/v1/tts/status');
+      var ttsStatus = await ttsStatusResp.json();
+      window._stormTtsActive = ttsStatus.available === true && ttsStatus.provider === 'storm-tts';
+    } catch (e) {
+      window._stormTtsActive = false;
+    }
 
     // Preload SpeechSynthesis voices (Chrome loads them async)
     if (speechSynthesis) {

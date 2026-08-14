@@ -51,6 +51,8 @@ services:
       - TLS_KEY_PATH=${TLS_KEY_PATH:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - TAVUS_API_KEY=${TAVUS_API_KEY:-}
+      - STORM_TTS_URL=${STORM_TTS_URL:-http://54.198.152.226:8000}
+      - STORM_TTS_API_KEY=${STORM_TTS_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

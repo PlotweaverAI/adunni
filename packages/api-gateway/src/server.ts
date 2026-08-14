@@ -29,6 +29,7 @@ import {
   type AuditEventType,
 } from '@adunni/security';
 import { TavusClient } from './tavus.js';
+import { StormTtsClient } from './storm-tts.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const JWT_SECRET = process.env.JWT_SECRET ?? 'dev_jwt_secret_change_in_production';
@@ -40,6 +41,10 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? '').split(',').map((s) => s.tr
 const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? 'savanna-bank';
 const TAVUS_API_KEY = process.env.TAVUS_API_KEY ?? '';
 const tavus = TAVUS_API_KEY ? new TavusClient(TAVUS_API_KEY) : null;
+
+const STORM_TTS_URL = process.env.STORM_TTS_URL ?? 'http://54.198.152.226:8000';
+const STORM_TTS_API_KEY = process.env.STORM_TTS_API_KEY ?? '';
+const stormTts = STORM_TTS_API_KEY ? new StormTtsClient(STORM_TTS_API_KEY, STORM_TTS_URL) : null;
 
 const ASR_SERVICE_URL = process.env.ASR_SERVICE_URL ?? 'http://localhost:3001';
 const TTS_SERVICE_URL = process.env.TTS_SERVICE_URL ?? 'http://localhost:3002';
@@ -514,6 +519,15 @@ app.get('/v1/video/status', (_req, res) => {
   });
 });
 
+// ── GET /v1/tts/status — Check if TTS is available ──
+app.get('/v1/tts/status', (_req, res) => {
+  res.json({
+    available: !!stormTts,
+    provider: stormTts ? 'storm-tts' : 'mock',
+    languages: ['yo', 'ha', 'ig', 'pcm', 'en-NG'],
+  });
+});
+
 // ── Admin: GET /v1/audit/events — Query audit log ──
 app.get('/v1/audit/events', authMiddleware, requireRole('admin'), async (req: AuthenticatedRequest, res) => {
   try {
@@ -953,33 +967,72 @@ async function processUserUtteranceWithLanguage(
     }
   }
 
-  // ── TTS: send real audio only when no video conversation is active ──
+  // ── TTS: synthesize AI response as real audio ──
   // When video is active, Tavus echo handles speech-to-speech (face speaks with lip-sync).
-  // The mock TTS would produce garbage audio, so we skip it.
+  // When no video, use STORM TTS (Nigerian multilingual) if available, else fall back to mock TTS.
   if (config && !videoConversation) {
-    try {
-      const ttsResp = await fetch(`${TTS_SERVICE_URL}/synthesize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: aiTextTranslated,
-          language: aiLanguage,
-          voicePersona: config.voicePersona,
-          sessionId,
-          turnId: `turn-${currentTurnIndex + 1}`,
-        }),
-      });
-      if (ttsResp.ok) {
-        const ttsResult = await ttsResp.json() as { audioBase64: string; format: string; sampleRate: number };
+    if (stormTts) {
+      try {
+        const ttsResult = await stormTts.generate(aiTextTranslated, aiLanguage);
         ws.send(JSON.stringify({
           type: 'audio',
-          audioBase64: ttsResult.audioBase64,
+          audioBase64: ttsResult.audio.toString('base64'),
           format: ttsResult.format,
           sampleRate: ttsResult.sampleRate,
         }));
+      } catch (err) {
+        console.error('[gateway] STORM TTS error:', err);
+        // Fall back to mock TTS
+        try {
+          const ttsResp = await fetch(`${TTS_SERVICE_URL}/synthesize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text: aiTextTranslated,
+              language: aiLanguage,
+              voicePersona: config.voicePersona,
+              sessionId,
+              turnId: `turn-${currentTurnIndex + 1}`,
+            }),
+          });
+          if (ttsResp.ok) {
+            const ttsResult = await ttsResp.json() as { audioBase64: string; format: string; sampleRate: number };
+            ws.send(JSON.stringify({
+              type: 'audio',
+              audioBase64: ttsResult.audioBase64,
+              format: ttsResult.format,
+              sampleRate: ttsResult.sampleRate,
+            }));
+          }
+        } catch (fallbackErr) {
+          console.error('[gateway] TTS fallback error:', fallbackErr);
+        }
       }
-    } catch (err) {
-      console.error('[gateway] TTS error:', err);
+    } else {
+      try {
+        const ttsResp = await fetch(`${TTS_SERVICE_URL}/synthesize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: aiTextTranslated,
+            language: aiLanguage,
+            voicePersona: config.voicePersona,
+            sessionId,
+            turnId: `turn-${currentTurnIndex + 1}`,
+          }),
+        });
+        if (ttsResp.ok) {
+          const ttsResult = await ttsResp.json() as { audioBase64: string; format: string; sampleRate: number };
+          ws.send(JSON.stringify({
+            type: 'audio',
+            audioBase64: ttsResult.audioBase64,
+            format: ttsResult.format,
+            sampleRate: ttsResult.sampleRate,
+          }));
+        }
+      } catch (err) {
+        console.error('[gateway] TTS error:', err);
+      }
     }
   }
 
