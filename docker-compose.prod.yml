@@ -1,0 +1,35 @@
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports: !override
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports: !override
+      - "127.0.0.1:6379:6379"
+
+  api-gateway:
+    ports: !override
+      - "30000:3000"
+    environment:
+      DATABASE_URL: postgres://adunni:${POSTGRES_PASSWORD}@postgres:5432/adunni
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+
+  admin-dashboard:
+    environment:
+      API_GATEWAY_URL: http://67.211.210.8:30000
+
+  action-executor:
+    environment:
+      DATABASE_URL: postgres://adunni:${POSTGRES_PASSWORD}@postgres:5432/adunni
+
+  config-service:
+    environment:
+      DATABASE_URL: postgres://adunni:${POSTGRES_PASSWORD}@postgres:5432/adunni
+
+  session-store:
+    environment:
+      DATABASE_URL: postgres://adunni:${POSTGRES_PASSWORD}@postgres:5432/adunni
