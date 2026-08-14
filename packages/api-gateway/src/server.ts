@@ -594,6 +594,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
 
     try {
       const msg = JSON.parse(data.toString());
+      console.log('[gateway] WS message received:', msg.type, 'setupDone=' + setupDone);
 
       if (msg.type === 'audio') {
         // Real audio chunk from browser microphone

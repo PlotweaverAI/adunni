@@ -31,6 +31,31 @@ export class ActionExecutorServiceImpl implements ActionExecutorService {
     }
 
     try {
+      // If no webhook URL is configured, return a mock result (demo mode)
+      if (!request.webhookUrl) {
+        const mockResult: Record<string, unknown> = {
+          action: request.actionName,
+          parameters: request.parameters,
+          mock: true,
+          result: 'success',
+          timestamp: new Date().toISOString(),
+        };
+
+        const result: ActionResult = {
+          actionId: request.actionId,
+          status: 'executed' as ActionStatus,
+          result: mockResult,
+          executedAt: new Date(),
+        };
+
+        await this.pool.query(
+          'UPDATE action_logs SET status = $1, result = $2, executed_at = NOW() WHERE id = $3',
+          ['executed', JSON.stringify(mockResult), request.actionId]
+        );
+
+        return result;
+      }
+
       const payload: WebhookPayload = {
         sessionId: request.sessionId,
         clientId: request.clientId,
