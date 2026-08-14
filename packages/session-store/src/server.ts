@@ -149,18 +149,6 @@ app.get('/clients/:clientId/recent-turns', async (req, res) => {
   }
 });
 
-// Cross-session memory: get recent turns for a client across all sessions
-app.get('/clients/:clientId/recent-turns', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit as string ?? '10', 10);
-    const turns = await store.getRecentTurnsByClient(req.params.clientId, limit);
-    res.json(turns);
-  } catch (err) {
-    console.error('[session-store] getRecentTurns error:', err);
-    res.status(500).json({ error: 'Failed to get recent turns' });
-  }
-});
-
 app.listen(PORT, () => {
   console.log(`[session-store] listening on :${PORT}`);
 });

@@ -292,7 +292,7 @@
     <h1>One voice.<br><em>Five languages.</em></h1>
     <p class="lede">Our new multilingual model keeps a speaker's identity when they cross languages. Pick a Yoruba voice and hear her Hausa, her Igbo, her Pidgin, her English. She still sounds like herself, because that is how Nigerians actually speak.</p>
     <div class="cta">
-      <button class="pill solid" onclick="document.getElementById('adunni').scrollIntoView();setTimeout(startCall,500)">Talk to Àdùnní</button>
+      <button class="pill solid" onclick="window.open('live.html','_blank')">Talk to Àdùnní</button>
       <button class="pill" onclick="document.getElementById('market').scrollIntoView();setTimeout(playAll,450)">Play Market Day</button>
     </div>
 
@@ -340,11 +340,15 @@
         </div>
         <div class="call-idle" id="callIdle">
           <b>She speaks all five. And she can see you.</b>
-          <span>Press start to run the call: Pidgin, Yorùbá, Hausa, Igbo and English, one person throughout, with a perception moment midway.</span>
-          <button class="pill solid" onclick="window.open('live.html','_blank')" style="margin-top:8px">Start the call</button>
+          <span>Start a real live call with Àdùnní — she hears you, sees you, and responds in whatever language you bring. Or play the scripted demo to see a sample call.</span>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:8px">
+            <button class="pill solid" onclick="window.open('live.html','_blank')">Start live call</button>
+            <button class="pill" onclick="document.getElementById('callIdle').classList.add('gone');startCall()">Play scripted demo</button>
+          </div>
         </div>
         <div class="stage-controls" style="margin-top:auto">
           <button class="pill" id="btnCall" onclick="window.open('live.html','_blank')">Start a live call</button>
+          <button class="pill" onclick="resetTurns();document.getElementById('callIdle').classList.remove('gone')">Reset demo</button>
         </div>
       </div>
       <aside class="transcript">
