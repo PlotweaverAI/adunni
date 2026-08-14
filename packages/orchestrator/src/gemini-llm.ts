@@ -13,7 +13,7 @@
 
 import type { LlmProvider, LlmRequest, LlmResponse } from '@adunni/shared-types';
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-flash-latest';
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 interface GeminiPart {
@@ -120,16 +120,34 @@ export class GeminiLlmProvider implements LlmProvider {
     }
 
     const url = `${GEMINI_ENDPOINT}?key=${this.apiKey}`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
-    });
 
-    if (!resp.ok) {
+    // Retry on 503 (overloaded) with exponential backoff
+    let resp: Response | null = null;
+    let lastError: string = '';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (resp.ok) break;
+
       const errText = await resp.text();
+      lastError = errText;
+
+      if (resp.status === 503 && attempt < 2) {
+        // Wait 1s, then 2s before retrying
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+
       throw new Error(`Gemini API error (${resp.status}): ${errText}`);
+    }
+
+    if (!resp || !resp.ok) {
+      throw new Error(`Gemini API error: ${lastError}`);
     }
 
     const data = (await resp.json()) as GeminiGenerateResponse;
