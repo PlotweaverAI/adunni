@@ -148,7 +148,8 @@ const wss = new WebSocketServer({ server });
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: '0.1.0' }));
 
 // ── Serve frontend demo at / ──
-const FRONTEND_PATH = path.resolve(process.env.FRONTEND_PATH ?? path.join(__dirname, '..', '..', '..', 'index.html'));
+const FRONTEND_DIR = path.resolve(process.env.FRONTEND_PATH ?? path.join(__dirname, '..', '..', '..'));
+const FRONTEND_PATH = path.join(FRONTEND_DIR, 'index.html');
 app.get('/', (_req, res) => {
   try {
     if (fs.existsSync(FRONTEND_PATH)) {
@@ -158,6 +159,20 @@ app.get('/', (_req, res) => {
     }
   } catch {
     res.status(404).json({ error: 'Frontend not found' });
+  }
+});
+
+// Serve live.html (standalone live voice agent page)
+app.get('/live.html', (_req, res) => {
+  try {
+    const livePath = path.join(FRONTEND_DIR, 'live.html');
+    if (fs.existsSync(livePath)) {
+      res.sendFile(livePath);
+    } else {
+      res.status(404).json({ error: 'live.html not found' });
+    }
+  } catch {
+    res.status(404).json({ error: 'live.html not found' });
   }
 });
 
