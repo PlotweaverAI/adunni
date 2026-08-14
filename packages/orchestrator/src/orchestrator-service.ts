@@ -23,7 +23,7 @@ export class MockLlmProvider implements LlmProvider {
 
     if (tools.length > 0) {
       for (const tool of tools) {
-        if (tool.name === 'get_balance' && (lower.includes('balance') || lower.includes('how much'))) {
+        if (tool.name === 'get_balance' && (lower.includes('balance') || lower.includes('how much') || lower.includes('owo') || lower.includes('kudi') || lower.includes('ego') || lower.includes('akanti'))) {
           return {
             text: '',
             toolCalls: [{ name: 'get_balance', arguments: { account_id: 'ACC-001' } }],
@@ -37,7 +37,11 @@ export class MockLlmProvider implements LlmProvider {
             usage: { inputTokens: 130, outputTokens: 70 },
           };
         }
-        if (tool.name === 'get_transfer_status' && (lower.includes('transfer status') || lower.includes('transfer gone') || lower.includes('send') || lower.includes('money') || lower.includes('owó'))) {
+        if (tool.name === 'get_transfer_status' && (
+          lower.includes('transfer status') ||
+          lower.includes('transfer gone') ||
+          (lower.includes('transfer') && (lower.includes('send') || lower.includes('money') || lower.includes('owó') || lower.includes('kudin') || lower.includes('chigo')))
+        )) {
           return {
             text: '',
             toolCalls: [{ name: 'get_transfer_status', arguments: { transfer_id: 'TRX-2026-001' } }],
@@ -55,6 +59,20 @@ export class MockLlmProvider implements LlmProvider {
       };
     }
 
+    if (lower.includes('statement')) {
+      return {
+        text: 'I can help with account balance, transfer status, or transfer limits. Bank statements are not available yet. If you need one, I can connect you to a human agent.',
+        usage: { inputTokens: 110, outputTokens: 46 },
+      };
+    }
+
+    if (lower.includes('detail') || lower.includes('details') || lower.includes('more info')) {
+      return {
+        text: 'I can help with account balance, transfer status, or transfer limits. Which one do you need?',
+        usage: { inputTokens: 100, outputTokens: 42 },
+      };
+    }
+
     if (lower.includes('thank') || lower.includes('daalụ') || lower.includes('madalla')) {
       return {
         text: "You're welcome! Is there anything else I can help you with today?",
@@ -63,7 +81,7 @@ export class MockLlmProvider implements LlmProvider {
     }
 
     return {
-      text: "I understand. Let me help you with that. Could you provide a bit more detail?",
+      text: 'I can help with account balance, transfer status, or transfer limits. What would you like to do?',
       usage: { inputTokens: 100, outputTokens: 45 },
     };
   }

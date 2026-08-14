@@ -31,6 +31,24 @@ import {
 import { TavusClient } from './tavus.js';
 import { StormTtsClient } from './storm-tts.js';
 
+// Translation cache: key = "text|src|tgt" -> translated text
+const translationCache = new Map<string, string>();
+async function cachedTranslate(text: string, src: string, tgt: string): Promise<string> {
+  const key = `${text}|${src}|${tgt}`;
+  const cached = translationCache.get(key);
+  if (cached) return cached;
+  const resp = await fetch(`${ASR_SERVICE_URL}/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, source_language: src, target_language: tgt }),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!resp.ok) throw new Error(`Translation failed: ${resp.status}`);
+  const result = await resp.json() as { translated_text: string };
+  translationCache.set(key, result.translated_text);
+  return result.translated_text;
+}
+
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const JWT_SECRET = process.env.JWT_SECRET ?? 'dev_jwt_secret_change_in_production';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'dev_encryption_key_change_in_production';
@@ -52,6 +70,48 @@ const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? 'http://localhost:3003'
 const ACTION_EXECUTOR_URL = process.env.ACTION_EXECUTOR_URL ?? 'http://localhost:3004';
 const CONFIG_SERVICE_URL = process.env.CONFIG_SERVICE_URL ?? 'http://localhost:3005';
 const SESSION_STORE_URL = process.env.SESSION_STORE_URL ?? 'http://localhost:3006';
+
+// Pre-warm translation cache with common AI responses (mock LLM returns these)
+const COMMON_AI_RESPONSES = [
+  'Done. I checked your account balance.',
+  'Done. I checked the transfer status.',
+  'I can help with account balance, transfer status, or transfer limits. Bank statements are not available yet. If you need one, I can connect you to a human agent.',
+  'I apologize, but I was unable to complete that action: undefined',
+];
+const PREWARM_LANGS: LanguageCode[] = ['yo', 'ha', 'ig'];
+
+function formatActionSuccessMessage(actionName: string, confirmed = false): string {
+  switch (actionName) {
+    case 'get_balance':
+      return confirmed ? 'Confirmed. I checked your account balance.' : 'Done. I checked your account balance.';
+    case 'get_transfer_status':
+      return confirmed ? 'Confirmed. I checked the transfer status.' : 'Done. I checked the transfer status.';
+    case 'update_transfer_limit':
+      return confirmed ? 'Confirmed. Your transfer limit has been updated successfully.' : 'Done. Your transfer limit has been updated successfully.';
+    default:
+      return confirmed ? 'Confirmed. The action has been completed successfully.' : 'Done. The action has been completed successfully.';
+  }
+}
+
+function formatActionFailureMessage(errorMessage?: string): string {
+  return errorMessage
+    ? `I apologize, but I was unable to complete that action: ${errorMessage}`
+    : 'I apologize, but I was unable to complete that action.';
+}
+
+async function prewarmTranslations() {
+  if (!ASR_SERVICE_URL) return;
+  for (const text of COMMON_AI_RESPONSES) {
+    for (const lang of PREWARM_LANGS) {
+      try {
+        await cachedTranslate(text, 'en-NG', lang);
+      } catch { /* ignore errors during prewarm */ }
+    }
+  }
+  console.log('[gateway] Translation cache pre-warmed');
+}
+// Fire prewarm in background (don't block startup)
+setTimeout(() => { prewarmTranslations().catch(() => {}); }, 5000);
 
 const pool = new Pool({ connectionString: DATABASE_URL, max: 10 });
 const encryption = new EncryptionService(ENCRYPTION_KEY);
@@ -744,58 +804,53 @@ async function processUserUtteranceWithLanguage(
   // ── Translation step: translate user utterance to config.translationLanguage ──
   const targetLang = config?.translationLanguage ?? 'en-NG';
   let translatedText = text;
-  let userTranslation = '';
 
-  if (language !== targetLang) {
-    try {
-      const translateResp = await fetch(`${ASR_SERVICE_URL}/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, source_language: language, target_language: targetLang }),
-        signal: AbortSignal.timeout(60000),
-      });
-      if (translateResp.ok) {
-        const translateResult = await translateResp.json() as { translated_text: string };
-        translatedText = translateResult.translated_text;
-        userTranslation = translatedText;
-      }
-    } catch (err) {
-      console.error('[gateway] translation error (user):', err);
-    }
-  }
+  // Skip translation for Pidgin <-> English (mutually intelligible)
+  const needsTranslation = language !== targetLang &&
+    !((language === 'pcm' && targetLang === 'en-NG') || (language === 'en-NG' && targetLang === 'pcm'));
 
-  await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
+  // Send user transcript immediately for instant feedback (before translation)
+  ws.send(JSON.stringify({
+    type: 'transcript',
+    turn: { speaker: 'user', language, text, confidence: languageConfidence },
+  }));
+
+  // Fire-and-forget session store (don't block on DB)
+  fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      sessionId,
-      turnIndex: currentTurnIndex,
-      speaker: 'user',
-      language,
-      text,
-      status: 'complete',
-      confidence: languageConfidence,
+      sessionId, turnIndex: currentTurnIndex, speaker: 'user',
+      language, text, status: 'complete', confidence: languageConfidence,
       latencyMs: Date.now() - startTime,
     }),
-  });
+  }).catch(() => {});
 
-  ws.send(JSON.stringify({
-    type: 'transcript',
-    turn: { speaker: 'user', language, text, confidence: languageConfidence, englishTranslation: userTranslation || undefined },
-  }));
-
-  // Send user transcript to video face as echo (so face can react)
+  // Send user transcript to video face as echo
   if (videoConversation && tavus) {
-    try {
-      await tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, text, {
-        inferenceId: `user-${sessionId}-${currentTurnIndex}`,
-        done: true,
-      });
-    } catch (e) {
-      console.error('[gateway] video echo (user) error:', e);
-    }
+    tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, text, {
+      inferenceId: `user-${sessionId}-${currentTurnIndex}`,
+      done: true,
+    }).catch((e: Error) => console.error('[gateway] video echo (user) error:', e));
   }
 
+  // Skip user translation for orchestrator - send original text directly
+  // The mock LLM handles native language keywords. Translation is only for display.
+  translatedText = text;
+
+  // Fire-and-forget user translation for display only
+  if (needsTranslation) {
+    cachedTranslate(text, language, targetLang).then(t => {
+      ws.send(JSON.stringify({
+        type: 'transcript',
+        turn: { speaker: 'user', language, text, confidence: languageConfidence, englishTranslation: t },
+      }));
+    }).catch(err => console.error('[gateway] translation error (user):', err));
+  } else if (language === 'pcm' && targetLang === 'en-NG') {
+    // Pidgin uses text as-is
+  }
+
+  // Get context (non-blocking, already fast)
   const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`);
   const context = await ctxResp.json() as ConversationContext;
 
@@ -871,8 +926,8 @@ async function processUserUtteranceWithLanguage(
       });
       const execResult = await execResp.json() as { status: string; errorMessage?: string };
       aiText = execResult.status === 'executed'
-        ? `Done. ${decision.actionName} completed successfully.`
-        : `I apologize, but I was unable to complete that action: ${execResult.errorMessage}`;
+        ? formatActionSuccessMessage(decision.actionName)
+        : formatActionFailureMessage(execResult.errorMessage);
     }
   } else if (decision.type === 'confirm_action') {
     if (decision.confirmed) {
@@ -894,8 +949,8 @@ async function processUserUtteranceWithLanguage(
         });
         const execResult = await execResp.json() as { status: string; errorMessage?: string };
         aiText = execResult.status === 'executed'
-          ? 'Confirmed. The action has been completed successfully.'
-          : `I was unable to complete the action: ${execResult.errorMessage}`;
+          ? formatActionSuccessMessage(action.actionName, true)
+          : formatActionFailureMessage(execResult.errorMessage);
       }
     } else {
       aiText = 'No problem. I have cancelled the action. Is there anything else I can help with?';
@@ -915,55 +970,43 @@ async function processUserUtteranceWithLanguage(
   const aiLanguage = language;
 
   // ── Translate AI response back to user's language if different ──
+  // Skip translation for Pidgin <-> English (mutually intelligible)
+  const needsAiTranslation = language !== targetLang && aiText &&
+    !((language === 'pcm' && targetLang === 'en-NG') || (language === 'en-NG' && targetLang === 'pcm'));
+
   let aiTextTranslated = aiText;
-  if (language !== targetLang && aiText) {
+  if (needsAiTranslation) {
     try {
-      const aiTranslateResp = await fetch(`${ASR_SERVICE_URL}/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: aiText, source_language: targetLang, target_language: language }),
-        signal: AbortSignal.timeout(60000),
-      });
-      if (aiTranslateResp.ok) {
-        const aiTranslateResult = await aiTranslateResp.json() as { translated_text: string };
-        aiTextTranslated = aiTranslateResult.translated_text;
-      }
+      aiTextTranslated = await cachedTranslate(aiText, targetLang, language);
     } catch (err) {
       console.error('[gateway] translation error (AI):', err);
     }
+  } else if (language === 'pcm' && targetLang === 'en-NG') {
+    aiTextTranslated = aiText; // Pidgin uses English text as-is
   }
 
-  await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
+  // Fire-and-forget session store (don't block on DB)
+  fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      sessionId,
-      turnIndex: currentTurnIndex + 1,
-      speaker: 'ai',
-      language: aiLanguage,
-      text: aiTextTranslated,
-      status: 'complete',
-      confidence: orchResult.confidence,
-      latencyMs: Date.now() - startTime,
-      actionId,
+      sessionId, turnIndex: currentTurnIndex + 1, speaker: 'ai',
+      language: aiLanguage, text: aiTextTranslated, status: 'complete',
+      confidence: orchResult.confidence, latencyMs: Date.now() - startTime, actionId,
     }),
-  });
+  }).catch(() => {});
 
   ws.send(JSON.stringify({
     type: 'transcript',
-    turn: { speaker: 'ai', language: aiLanguage, text: aiTextTranslated, confidence: orchResult.confidence, englishTranslation: language !== targetLang ? aiText : undefined },
+    turn: { speaker: 'ai', language: aiLanguage, text: aiTextTranslated, confidence: orchResult.confidence, englishTranslation: needsAiTranslation ? aiText : undefined },
   }));
 
   // Send AI response to video face as echo — face will speak with lip-sync
   if (videoConversation && tavus) {
-    try {
-      await tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiTextTranslated, {
-        inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
-        done: true,
-      });
-    } catch (e) {
-      console.error('[gateway] video echo (ai) error:', e);
-    }
+    tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, aiTextTranslated, {
+      inferenceId: `ai-${sessionId}-${currentTurnIndex + 1}`,
+      done: true,
+    }).catch((e: Error) => console.error('[gateway] video echo (ai) error:', e));
   }
 
   // ── TTS: synthesize AI response as real audio ──
