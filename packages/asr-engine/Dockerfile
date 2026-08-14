@@ -34,8 +34,10 @@ ENV TRANSFORMERS_CACHE=/models
 ENV CUDA_VISIBLE_DEVICES=""
 RUN mkdir -p /models
 
-# Pre-download STORM-OS-ASR-SMALL model (single model for all 5 Nigerian languages)
-RUN python -c "from transformers import pipeline; pipeline('automatic-speech-recognition', model='wolethereader/STORM-OS-ASR-SMALL', chunk_length_s=30)" 2>/dev/null || true
+# Pre-download STORM-OS-ASR-SMALL model + base model feature extractor
+# STORM model ships tokenizer + weights but no preprocessor_config.json,
+# so we also cache openai/whisper-small for the feature extractor
+RUN python -c "from transformers import WhisperForConditionalGeneration, WhisperProcessor, WhisperFeatureExtractor; WhisperFeatureExtractor.from_pretrained('openai/whisper-small'); WhisperProcessor.from_pretrained('wolethereader/STORM-OS-ASR-SMALL', feature_extractor=WhisperFeatureExtractor.from_pretrained('openai/whisper-small')); WhisperForConditionalGeneration.from_pretrained('wolethereader/STORM-OS-ASR-SMALL')" 2>/dev/null || true
 
 # Pre-download NLLB translation model (supports all African languages bidirectionally)
 RUN python -c "from transformers import pipeline; pipeline('translation', model='facebook/nllb-200-distilled-600M')" 2>/dev/null || true

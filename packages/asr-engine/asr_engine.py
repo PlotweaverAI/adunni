@@ -101,6 +101,11 @@ def _build_forced_decoder_ids(processor, lang_code: str):
 def _load_asr_pipeline():
     """Load the STORM-OS-ASR-SMALL pipeline (cached singleton).
 
+    STORM-OS-ASR-SMALL is a LoRA-merged checkpoint of openai/whisper-small.
+    It ships model weights + tokenizer but NOT a preprocessor_config.json,
+    so we load the processor (feature extractor + tokenizer) from the base
+    model openai/whisper-small, and the model weights from STORM-OS-ASR-SMALL.
+
     Uses transformers pipeline (Option C from the technical guide) with
     chunk_length_s=30, stride_length_s=5 for automatic chunking + stitching.
     """
@@ -109,20 +114,41 @@ def _load_asr_pipeline():
         return _asr_pipeline, _processor
 
     import torch
-    from transformers import pipeline as hf_pipeline, WhisperProcessor
+    from transformers import (
+        pipeline as hf_pipeline,
+        WhisperProcessor,
+        WhisperForConditionalGeneration,
+        WhisperFeatureExtractor,
+    )
 
     log.info(f"Loading STORM-OS-ASR-SMALL pipeline: {STORM_MODEL_ID} (device={DEVICE})")
 
-    _processor = WhisperProcessor.from_pretrained(STORM_MODEL_ID)
+    # Processor: feature extractor from base model, tokenizer from STORM model
+    # (STORM model has the extended tokenizer with <|ig|> and <|pcm|> tokens)
+    base_model_id = "openai/whisper-small"
+    _processor = WhisperProcessor.from_pretrained(
+        STORM_MODEL_ID,
+        feature_extractor=WhisperFeatureExtractor.from_pretrained(base_model_id),
+        token=HF_TOKEN or None,
+    )
+
+    # Model weights from STORM-OS-ASR-SMALL (merged LoRA checkpoint)
+    model = WhisperForConditionalGeneration.from_pretrained(
+        STORM_MODEL_ID,
+        torch_dtype=torch.float32,
+        token=HF_TOKEN or None,
+    )
+    model.eval()
 
     _asr_pipeline = hf_pipeline(
         "automatic-speech-recognition",
-        model=STORM_MODEL_ID,
+        model=model,
+        tokenizer=_processor.tokenizer,
+        feature_extractor=_processor.feature_extractor,
         chunk_length_s=30,
         stride_length_s=5,
         device=0 if DEVICE == "cuda" else -1,
         torch_dtype=torch.float32,
-        token=HF_TOKEN or None,
     )
 
     log.info(f"STORM-OS-ASR-SMALL pipeline loaded")
