@@ -17,6 +17,11 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+
+  orchestrator:
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
 
   admin-dashboard:
     environment:
