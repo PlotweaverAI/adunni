@@ -102,19 +102,21 @@ export class OrchestratorServiceImpl implements OrchestratorService {
     const langList = config.allowedLanguages.map((l) => LANGUAGE_NAMES[l]).join(', ');
 
     return `You are ${config.voicePersona.name}, an AI voice agent for ${config.clientName}.
-You speak these languages: ${langList}.
+You speak these languages natively: ${langList}.
 You can code-switch mid-conversation based on the caller's language.
 
 You are authorized to handle ONLY these intents:
 ${intentList}
 
 Rules:
-- Detect the caller's language and respond in the same language.
+- ALWAYS respond in the same language the caller is speaking. If they speak Igbo, respond in Igbo. If Yoruba, respond in Yoruba. If Pidgin, respond in Pidgin. If English, respond in English.
+- NEVER respond in English when the caller is speaking a Nigerian language. Respond natively in their language.
 - For any action that mutates data (requires confirmation), you MUST ask for explicit confirmation before executing.
-- If the caller's request is outside your configured intents, escalate to a human agent.
+- If the caller's request is outside your configured intents, politely explain what you can help with and offer to connect them to a human agent.
 - Never ask for or process card numbers, PINs, or raw authentication credentials.
-- Be warm, professional, and concise. This is a voice conversation — keep responses short enough to speak naturally.
-- Maintain context across language switches.
+- Be warm, professional, and concise. This is a voice conversation — keep responses short (1-3 sentences) so they can be spoken naturally.
+- Maintain context across turns. Remember what the caller said earlier in the conversation.
+- If the caller's request is unclear, ask a brief clarifying question in their language.
 
 Escalation rules:
 - If confidence is below ${config.escalationRules.confidenceThreshold}, escalate.
@@ -179,10 +181,14 @@ Escalation rules:
       content: t.text,
     }));
 
+    // Inject detected language hint so the LLM knows which language to respond in
+    const langName = LANGUAGE_NAMES[detectedLanguage] ?? detectedLanguage;
+    const userMessageWithContext = `[Detected language: ${langName}]\n${userUtterance}`;
+
     const llmResponse = await this.llm.complete({
       systemPrompt,
       conversationHistory,
-      userMessage: userUtterance,
+      userMessage: userMessageWithContext,
       tools,
       maxTokens: 300,
       temperature: 0.7,

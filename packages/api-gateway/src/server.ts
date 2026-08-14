@@ -1045,8 +1045,11 @@ async function processUserUtteranceWithLanguage(
   const aiLanguage = language;
 
   // ── Translate AI response back to user's language if different ──
+  // With a real LLM (Gemini), the AI already responds in the user's language natively,
+  // so we skip NLLB translation. Only translate when using the mock LLM (English-only).
   // Skip translation for Pidgin <-> English (mutually intelligible)
-  const needsAiTranslation = language !== targetLang && aiText &&
+  const usingRealLlm = !!process.env.GEMINI_API_KEY;
+  const needsAiTranslation = !usingRealLlm && language !== targetLang && aiText &&
     !((language === 'pcm' && targetLang === 'en-NG') || (language === 'en-NG' && targetLang === 'pcm'));
 
   let aiTextTranslated = aiText;

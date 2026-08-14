@@ -1,9 +1,20 @@
 import express from 'express';
 import { OrchestratorServiceImpl } from './orchestrator-service.js';
+import { GeminiLlmProvider } from './gemini-llm.js';
 import type { OrchestratorRequest } from '@adunni/shared-types';
 
 const PORT = parseInt(process.env.PORT ?? '3003', 10);
-const orchestrator = new OrchestratorServiceImpl();
+
+// Use Gemini Flash if API key is set, otherwise fall back to mock
+const geminiKey = process.env.GEMINI_API_KEY;
+const llm = geminiKey ? new GeminiLlmProvider(geminiKey) : undefined;
+if (llm) {
+  console.log('[orchestrator] Using Gemini Flash LLM provider');
+} else {
+  console.log('[orchestrator] GEMINI_API_KEY not set — using MockLlmProvider (limited functionality)');
+}
+
+const orchestrator = new OrchestratorServiceImpl(llm);
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 

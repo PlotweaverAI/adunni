@@ -1,0 +1,178 @@
+/**
+ * GeminiLlmProvider — Real LLM provider using Google Gemini Flash.
+ *
+ * Uses the Generative Language REST API (no SDK dependency needed).
+ * Supports:
+ *   - Multilingual conversation (Yoruba, Igbo, Hausa, Pidgin, English)
+ *   - Tool/function calling for banking intents
+ *   - Conversation history for context-aware responses
+ *
+ * Free tier: 15 req/min, 1500 req/day (gemini-2.0-flash)
+ * Get API key: https://aistudio.google.com/apikey
+ */
+
+import type { LlmProvider, LlmRequest, LlmResponse } from '@adunni/shared-types';
+
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+interface GeminiPart {
+  text?: string;
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: Record<string, unknown> };
+}
+
+interface GeminiContent {
+  role: 'user' | 'model';
+  parts: GeminiPart[];
+}
+
+interface GeminiFunctionDeclaration {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+interface GeminiGenerateRequest {
+  contents: GeminiContent[];
+  systemInstruction?: { parts: { text: string }[] };
+  tools?: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }>;
+  generationConfig: {
+    maxOutputTokens: number;
+    temperature: number;
+  };
+}
+
+interface GeminiGenerateResponse {
+  candidates: Array<{
+    content: {
+      role: string;
+      parts: GeminiPart[];
+    };
+    finishReason: string;
+  }>;
+  usageMetadata: {
+    promptTokenCount: number;
+    candidatesTokenCount: number;
+    totalTokenCount: number;
+  };
+}
+
+export class GeminiLlmProvider implements LlmProvider {
+  name = 'gemini-flash';
+  private apiKey: string;
+
+  constructor(apiKey?: string) {
+    this.apiKey = apiKey ?? process.env.GEMINI_API_KEY ?? '';
+    if (!this.apiKey) {
+      console.warn('[gemini-llm] GEMINI_API_KEY not set — provider will fail on requests');
+    }
+  }
+
+  async complete(request: LlmRequest): Promise<LlmResponse> {
+    if (!this.apiKey) {
+      throw new Error('GEMINI_API_KEY is not set');
+    }
+
+    // Build system instruction with language directive
+    const systemParts: string[] = [request.systemPrompt];
+
+    // Build conversation contents (Gemini uses "user" and "model" roles)
+    const contents: GeminiContent[] = [];
+
+    // Add conversation history
+    for (const turn of request.conversationHistory) {
+      contents.push({
+        role: turn.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: turn.content }],
+      });
+    }
+
+    // Add current user message
+    contents.push({
+      role: 'user',
+      parts: [{ text: request.userMessage }],
+    });
+
+    // Build tools (function declarations) if any
+    const tools: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }> = [];
+    if (request.tools.length > 0) {
+      tools.push({
+        functionDeclarations: request.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters as Record<string, unknown>,
+        })),
+      });
+    }
+
+    const body: GeminiGenerateRequest = {
+      contents,
+      systemInstruction: { parts: [{ text: systemParts.join('\n\n') }] },
+      generationConfig: {
+        maxOutputTokens: request.maxTokens,
+        temperature: request.temperature,
+      },
+    };
+
+    if (tools.length > 0) {
+      body.tools = tools;
+    }
+
+    const url = `${GEMINI_ENDPOINT}?key=${this.apiKey}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Gemini API error (${resp.status}): ${errText}`);
+    }
+
+    const data = (await resp.json()) as GeminiGenerateResponse;
+
+    if (!data.candidates || data.candidates.length === 0) {
+      return {
+        text: 'I apologize, but I was unable to generate a response.',
+        usage: { inputTokens: 0, outputTokens: 0 },
+      };
+    }
+
+    const candidate = data.candidates[0];
+    const parts = candidate.content?.parts ?? [];
+
+    // Extract text and function calls from parts
+    let text = '';
+    const toolCalls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+
+    for (const part of parts) {
+      if (part.text) {
+        text += part.text;
+      }
+      if (part.functionCall) {
+        toolCalls.push({
+          name: part.functionCall.name,
+          arguments: part.functionCall.args ?? {},
+        });
+      }
+    }
+
+    const usage = data.usageMetadata ?? {
+      promptTokenCount: 0,
+      candidatesTokenCount: 0,
+      totalTokenCount: 0,
+    };
+
+    return {
+      text: text.trim(),
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      usage: {
+        inputTokens: usage.promptTokenCount ?? 0,
+        outputTokens: usage.candidatesTokenCount ?? 0,
+      },
+    };
+  }
+}
