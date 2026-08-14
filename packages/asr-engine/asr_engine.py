@@ -123,14 +123,20 @@ def _load_asr_pipeline():
 
     log.info(f"Loading STORM-OS-ASR-SMALL pipeline: {STORM_MODEL_ID} (device={DEVICE})")
 
-    # Processor: feature extractor from base model, tokenizer from STORM model
-    # (STORM model has the extended tokenizer with <|ig|> and <|pcm|> tokens)
+    # Feature extractor from base model (STORM model has no preprocessor_config.json)
     base_model_id = "openai/whisper-small"
-    _processor = WhisperProcessor.from_pretrained(
-        STORM_MODEL_ID,
-        feature_extractor=WhisperFeatureExtractor.from_pretrained(base_model_id),
-        token=HF_TOKEN or None,
-    )
+    feature_extractor = WhisperFeatureExtractor.from_pretrained(base_model_id)
+
+    # Tokenizer from STORM model (has extended <|ig|> and <|pcm|> tokens)
+    from transformers import WhisperTokenizerFast
+    tokenizer = WhisperTokenizerFast.from_pretrained(STORM_MODEL_ID, token=HF_TOKEN or None)
+
+    # Build a simple processor-like object for forced_decoder_ids construction
+    class _SimpleProcessor:
+        def __init__(self, tok, fe):
+            self.tokenizer = tok
+            self.feature_extractor = fe
+    _processor = _SimpleProcessor(tokenizer, feature_extractor)
 
     # Model weights from STORM-OS-ASR-SMALL (merged LoRA checkpoint)
     model = WhisperForConditionalGeneration.from_pretrained(
@@ -143,8 +149,8 @@ def _load_asr_pipeline():
     _asr_pipeline = hf_pipeline(
         "automatic-speech-recognition",
         model=model,
-        tokenizer=_processor.tokenizer,
-        feature_extractor=_processor.feature_extractor,
+        tokenizer=tokenizer,
+        feature_extractor=feature_extractor,
         chunk_length_s=30,
         stride_length_s=5,
         device=0 if DEVICE == "cuda" else -1,
@@ -235,6 +241,16 @@ def detect_language_from_text(text: str) -> dict:
     return {"language": best_lang, "confidence": confidence}
 
 
+# ── Strip Whisper special tokens from output ──
+_SPECIAL_TOKEN_RE = re.compile(r"<\|[^|]+\|>")
+
+
+def _clean_transcript(text: str) -> str:
+    """Remove Whisper special tokens like <|startoftranscript|> from output."""
+    text = _SPECIAL_TOKEN_RE.sub("", text)
+    return text.strip()
+
+
 # ── Transcribe audio file ──
 def _transcribe_with_language(audio_path: str, language: str) -> str:
     """Internal: transcribe with a specific forced language. Returns text only."""
@@ -247,7 +263,7 @@ def _transcribe_with_language(audio_path: str, language: str) -> str:
             "max_new_tokens": 225,
         },
     )
-    return result["text"].strip()
+    return _clean_transcript(result["text"])
 
 
 def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
