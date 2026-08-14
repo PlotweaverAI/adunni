@@ -337,6 +337,9 @@
   var usingWebSpeech = false;
   var currentAiUtterance = null;
   var aiSpeechFallbackTimer = null;
+  var lastUserTurnEl = null;
+  var lastUserTurnText = '';
+  var lastUserTurnIsPartial = false;
 
   // ── Video state ──
   var dailyCall = null;
@@ -427,6 +430,21 @@
     html += '</div>';
 
     el.transcriptList.insertAdjacentHTML('beforeend', html);
+    el.transcriptList.scrollTop = el.transcriptList.scrollHeight;
+    return el.transcriptList.lastElementChild;
+  }
+
+  function updateTurnTranslation(turnEl, trans) {
+    if (!turnEl) return;
+    var existing = turnEl.querySelector('.turn-trans');
+    if (existing) {
+      existing.textContent = trans;
+    } else {
+      var div = document.createElement('div');
+      div.className = 'turn-trans';
+      div.textContent = trans;
+      turnEl.appendChild(div);
+    }
     el.transcriptList.scrollTop = el.transcriptList.scrollHeight;
   }
 
@@ -965,9 +983,42 @@
         }
 
       } else if (turn.speaker === 'user') {
+        // Handle partial (streaming) transcripts — update the last user turn in place
+        if (turn.isPartial) {
+          if (lastUserTurnEl && lastUserTurnIsPartial) {
+            var bubble = lastUserTurnEl.querySelector('.turn-bubble');
+            if (bubble) bubble.textContent = turn.text;
+            el.captionText.innerHTML = esc(turn.text);
+            return;
+          }
+          userSpeaking = true;
+          transcribing = true;
+          lastUserTurnEl = addTranscriptTurn('user', turn.text + ' ...', turn.language, turn.englishTranslation);
+          lastUserTurnText = turn.text;
+          lastUserTurnIsPartial = true;
+          el.captionBar.style.display = 'block';
+          el.captionLabel.textContent = 'YOU · SPEAKING';
+          el.captionLabel.style.color = '#FFB098';
+          el.captionText.innerHTML = esc(turn.text);
+          updateUI();
+          return;
+        }
+
+        // Final transcript — replace partial if exists
+        if (lastUserTurnEl && lastUserTurnIsPartial) {
+          var bubble = lastUserTurnEl.querySelector('.turn-bubble');
+          if (bubble) bubble.textContent = turn.text;
+          lastUserTurnIsPartial = false;
+          lastUserTurnText = turn.text;
+        } else if (lastUserTurnEl && lastUserTurnText === turn.text && turn.englishTranslation) {
+          updateTurnTranslation(lastUserTurnEl, turn.englishTranslation);
+          return;
+        } else {
+          lastUserTurnEl = addTranscriptTurn('user', turn.text, turn.language, turn.englishTranslation);
+          lastUserTurnText = turn.text;
+        }
         userSpeaking = true;
         transcribing = false;
-        addTranscriptTurn('user', turn.text, turn.language, turn.englishTranslation);
         turnCount++;
 
         // Show caption

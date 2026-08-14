@@ -5,17 +5,16 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
 
-# ASR models (from Plotweaver-AI-Models)
+# ASR model — STORM-OS-ASR-SMALL (whisper-small LoRA-fine-tuned)
 transformers==4.46.3
 torch==2.5.1
 torchaudio==2.5.1
-stable-ts==2.16.0
-openai-whisper==20231117
 
-# Audio handling
+# Audio handling (librosa for resampling per the technical guide)
 soundfile==0.12.1
 numpy==1.26.4
+librosa==0.10.2.post1
 
-# Translation (Helsinki-NLP opus-mt requires sentencepiece)
+# Translation (NLLB requires sentencepiece)
 sentencepiece==0.2.0
 sacremoses==0.1.1

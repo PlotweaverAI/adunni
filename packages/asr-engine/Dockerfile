@@ -23,8 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir fastapi==0.115.6 "uvicorn[standard]==0.34.0" pydantic==2.10.4 && \
     pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir transformers==4.46.3 soundfile==0.12.1 numpy==1.26.4 sentencepiece==0.2.0 sacremoses==0.1.1 && \
-    pip install --no-cache-dir --no-build-isolation openai-whisper==20231117 && \
-    pip install --no-cache-dir stable-ts==2.16.0
+    pip install --no-cache-dir librosa==0.10.2.post1
 
 # Copy the application
 COPY packages/asr-engine/ ./
@@ -35,8 +34,8 @@ ENV TRANSFORMERS_CACHE=/models
 ENV CUDA_VISIBLE_DEVICES=""
 RUN mkdir -p /models
 
-# Pre-download whisper-tiny model so first transcription is fast
-RUN python -c "import stable_whisper; stable_whisper.load_model('tiny', device='cpu')" 2>/dev/null || true
+# Pre-download STORM-OS-ASR-SMALL model (single model for all 5 Nigerian languages)
+RUN python -c "from transformers import pipeline; pipeline('automatic-speech-recognition', model='wolethereader/STORM-OS-ASR-SMALL', chunk_length_s=30)" 2>/dev/null || true
 
 # Pre-download NLLB translation model (supports all African languages bidirectionally)
 RUN python -c "from transformers import pipeline; pipeline('translation', model='facebook/nllb-200-distilled-600M')" 2>/dev/null || true

@@ -642,6 +642,9 @@ wss.on('connection', async (ws: WebSocket, req) => {
   let sessionActive = true;
   let setupDone = false;
   let videoConversation: { conversationId: string; conversationUrl: string } | null = null;
+  let partialTranscribeTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastPartialText = '';
+  let detectedLanguage: LanguageCode | null = null;
 
   // Register message/close handlers BEFORE async setup so early messages aren't lost
   ws.on('message', async (data: Buffer) => {
@@ -657,15 +660,86 @@ wss.on('connection', async (ws: WebSocket, req) => {
 
       if (msg.type === 'audio') {
         // Real audio chunk from browser microphone
-        // Buffer chunks until we get a complete utterance (isFinal flag or silence detection)
         const audioChunk = msg.audioBase64 ? Buffer.from(msg.audioBase64, 'base64') : Buffer.from(msg.audio, 'base64');
         audioBuffer.push(audioChunk);
 
+        // ── VAD: check if chunk contains speech ──
+        if (!msg.isFinal && audioChunk.length > 200) {
+          try {
+            const vadResp = await fetch(`${ASR_SERVICE_URL}/vad`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                audio_base64: audioChunk.toString('base64'),
+                encoding: 'pcm16',
+                sample_rate: 16000,
+              }),
+              signal: AbortSignal.timeout(5000),
+            });
+            if (vadResp.ok) {
+              await vadResp.json();
+              // VAD result available for future auto-stop logic
+              // Currently we still rely on client-side isFinal, but VAD data is collected
+            }
+          } catch {
+            // VAD failed — continue without it (fail open)
+          }
+        }
+
+        // ── Streaming: send partial transcripts as chunks arrive ──
+        if (!msg.isFinal && audioBuffer.length > 0 && audioBuffer.length % 5 === 0) {
+          if (partialTranscribeTimer) clearTimeout(partialTranscribeTimer);
+          partialTranscribeTimer = setTimeout(async () => {
+            partialTranscribeTimer = null;
+            if (audioBuffer.length === 0 || !sessionActive) return;
+            try {
+              const partialAudio = Buffer.concat(audioBuffer);
+              const partialResp = await fetch(`${ASR_SERVICE_URL}/transcribe/partial`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  audio_base64: partialAudio.toString('base64'),
+                  encoding: msg.encoding || 'webm',
+                  language: detectedLanguage,
+                }),
+                signal: AbortSignal.timeout(10000),
+              });
+              if (partialResp.ok) {
+                const partialResult = await partialResp.json() as { text: string; language: LanguageCode; confidence: number; is_partial: boolean };
+                if (partialResult.text && partialResult.text.trim() && partialResult.text !== lastPartialText) {
+                  lastPartialText = partialResult.text;
+                  if (!detectedLanguage && partialResult.language) {
+                    detectedLanguage = partialResult.language;
+                  }
+                  ws.send(JSON.stringify({
+                    type: 'transcript',
+                    turn: {
+                      speaker: 'user',
+                      language: partialResult.language,
+                      text: partialResult.text,
+                      confidence: partialResult.confidence,
+                      isPartial: true,
+                    },
+                  }));
+                }
+              }
+            } catch {
+              // Partial transcription failed — non-critical
+            }
+          }, 300);
+        }
+
         // If marked as final, transcribe the full buffer via the ASR engine
         if (msg.isFinal) {
+          if (partialTranscribeTimer) {
+            clearTimeout(partialTranscribeTimer);
+            partialTranscribeTimer = null;
+          }
+
           if (audioBuffer.length > 0) {
             const combined = Buffer.concat(audioBuffer);
             audioBuffer = [];
+            lastPartialText = '';
 
             if (combined.length < 200) {
               console.warn('[gateway] Audio too small (' + combined.length + ' bytes), skipping ASR');
@@ -680,14 +754,15 @@ wss.on('connection', async (ws: WebSocket, req) => {
                   body: JSON.stringify({
                     audio_base64: combined.toString('base64'),
                     encoding: msg.encoding || 'webm',
-                    language: msg.language || null,
+                    language: detectedLanguage || msg.language || null,
                   }),
-                  signal: AbortSignal.timeout(120000), // 2 min timeout for model download + inference
+                  signal: AbortSignal.timeout(120000),
                 });
 
                 if (asrEngineResp.ok) {
                   const asrResult = await asrEngineResp.json() as { text: string; language: LanguageCode; confidence: number };
                   if (asrResult.text && asrResult.text.trim()) {
+                    detectedLanguage = asrResult.language;
                     await processUserUtteranceWithLanguage(
                       asrResult.text,
                       asrResult.language,

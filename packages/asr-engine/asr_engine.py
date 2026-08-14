@@ -1,14 +1,23 @@
 """
 asr_engine.py — Python ASR microservice for Àdùnní
 
-Wraps NCAIR1 (Yoruba/Hausa/Igbo) and OpenAI Whisper (English/French/Swahili/Chinese)
-HuggingFace models behind a REST API compatible with Adunni's asr-service.
+Uses STORM-OS-ASR-SMALL (wolethereader/STORM-OS-ASR-SMALL) — a single Whisper-small
+LoRA-fine-tuned model covering all five Nigerian languages:
+  yo (Yoruba), ha (Hausa), ig (Igbo), pcm (Nigerian Pidgin), en (Nigerian English)
+
+Per the model's technical usage guide:
+  - Always force the language explicitly via forced_decoder_ids (never auto-detect)
+  - Use the transformers pipeline with chunk_length_s=30, stride_length_s=5
+  - Audio must be 16kHz mono
 
 Endpoints:
   GET  /health            — service health + provider info
   GET  /info              — provider info + supported languages
-  POST /detect-language   — { text } -> { language, confidence }
+  POST /detect-language   — { text } -> { language, confidence } (keyword-based router)
   POST /transcribe        — { audio_path | audio_base64, language } -> { text, language, confidence }
+  POST /transcribe/partial — { audio_base64, encoding, language } -> interim transcript
+  POST /vad               — { audio_base64 } -> { has_speech, speech_ratio, segments }
+  POST /translate         — { text, source_language, target_language } -> translated text
 
 Models are downloaded from HuggingFace on first use (cached locally).
 Set HF_TOKEN env var if any models require gated access.
@@ -19,6 +28,7 @@ import re
 import base64
 import tempfile
 import logging
+import numpy as np
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -44,77 +54,84 @@ def _torch_cuda_available() -> bool:
 
 DEVICE = "cuda" if _torch_cuda_available() else "cpu"
 
-# Model registry — mirrors the Plotweaver-AI-Models repo
-# Language code mapping: Adunni LanguageCode -> human language name -> HF model
-# Using whisper-tiny for speed on CPU (39M params vs 769M for medium)
-LANG_TO_MODEL = {
-    "en-NG": "openai/whisper-tiny",
-    "yo":    "NCAIR1/Yoruba-ASR",
-    "ha":    "NCAIR1/Hausa-ASR",
-    "ig":    "NCAIR1/Igbo-ASR",
-    # Pidgin (pcm) has no dedicated model — use whisper-tiny as fallback
-    "pcm":   "openai/whisper-tiny",
+# ── Model registry ──
+# Single model handles all five languages — STORM-OS-ASR-SMALL
+# Base: openai/whisper-small, LoRA-fine-tuned and merged for Nigerian languages
+STORM_MODEL_ID = "wolethereader/STORM-OS-ASR-SMALL"
+
+# Adunni LanguageCode -> Whisper language token code
+# Per the technical guide: always force language, never auto-detect
+LANG_TO_WHISPER_CODE = {
+    "en-NG": "en",
+    "yo":    "yo",
+    "ha":    "ha",
+    "ig":    "ig",
+    "pcm":   "pcm",
 }
 
-# Reverse map: human language name -> Adunni LanguageCode
-HUMAN_TO_CODE = {
-    "English": "en-NG",
-    "Yoruba":  "yo",
-    "Hausa":   "ha",
-    "Igbo":    "ig",
-    "French":  "en-NG",  # no French LanguageCode in Adunni, fallback
-    "Swahili": "en-NG",
-    "Chinese": "en-NG",
-}
-
-SUPPORTED_LANGUAGES = list(LANG_TO_MODEL.keys())
+SUPPORTED_LANGUAGES = list(LANG_TO_WHISPER_CODE.keys())
 
 # ── Lazy-loaded model cache ──
-_loaded_models: dict[str, object] = {}
-_transformers_pipeline = None
-_stable_whisper = None
+_asr_pipeline = None
+_processor = None
+_forced_decoder_ids_cache: dict[str, list] = {}
 
 
-def _get_transformers_pipeline():
-    global _transformers_pipeline
-    if _transformers_pipeline is None:
-        from transformers import pipeline as hf_pipeline
-        _transformers_pipeline = hf_pipeline
-    return _transformers_pipeline
+def _build_forced_decoder_ids(processor, lang_code: str):
+    """Build forced_decoder_ids to force a specific language (per STORM-OS-ASR-SMALL guide)."""
+    if lang_code in _forced_decoder_ids_cache:
+        return _forced_decoder_ids_cache[lang_code]
+
+    vocab = processor.tokenizer.get_vocab()
+    whisper_lang = LANG_TO_WHISPER_CODE.get(lang_code, "en")
+    token_id = vocab.get(f"<|{whisper_lang}|>")
+    if token_id is None:
+        # Fallback to English if the language token isn't found
+        token_id = vocab.get("<|en|>")
+
+    forced_ids = [
+        [1, token_id],
+        [2, vocab["<|transcribe|>"]],
+        [3, vocab["<|notimestamps|>"]],
+    ]
+    _forced_decoder_ids_cache[lang_code] = forced_ids
+    return forced_ids
 
 
-def _load_model(model_id: str):
-    """Load a HuggingFace ASR model (cached after first load)."""
-    if model_id in _loaded_models:
-        return _loaded_models[model_id]
+def _load_asr_pipeline():
+    """Load the STORM-OS-ASR-SMALL pipeline (cached singleton).
 
-    log.info(f"Loading ASR model: {model_id} (device={DEVICE})")
+    Uses transformers pipeline (Option C from the technical guide) with
+    chunk_length_s=30, stride_length_s=5 for automatic chunking + stitching.
+    """
+    global _asr_pipeline, _processor
+    if _asr_pipeline is not None:
+        return _asr_pipeline, _processor
 
-    if "openai/whisper" in model_id:
-        # Use stable_whisper for Whisper models (better word timing)
-        import stable_whisper
-        model_size = model_id.split("/")[-1].replace("whisper-", "")  # e.g. "medium"
-        model = stable_whisper.load_model(model_size, device=DEVICE)
-    else:
-        # Use HuggingFace transformers pipeline for NCAIR1 models
-        hf_pipeline = _get_transformers_pipeline()
-        import torch
-        model = hf_pipeline(
-            "automatic-speech-recognition",
-            model=model_id,
-            chunk_length_s=30,
-            device=0 if DEVICE == "cuda" else -1,
-            token=HF_TOKEN or None,
-        )
+    import torch
+    from transformers import pipeline as hf_pipeline, WhisperProcessor
 
-    _loaded_models[model_id] = model
-    log.info(f"Model loaded: {model_id}")
-    return model
+    log.info(f"Loading STORM-OS-ASR-SMALL pipeline: {STORM_MODEL_ID} (device={DEVICE})")
+
+    _processor = WhisperProcessor.from_pretrained(STORM_MODEL_ID)
+
+    _asr_pipeline = hf_pipeline(
+        "automatic-speech-recognition",
+        model=STORM_MODEL_ID,
+        chunk_length_s=30,
+        stride_length_s=5,
+        device=0 if DEVICE == "cuda" else -1,
+        torch_dtype=torch.float32,
+        token=HF_TOKEN or None,
+    )
+
+    log.info(f"STORM-OS-ASR-SMALL pipeline loaded")
+    return _asr_pipeline, _processor
 
 
-# ── Language detection from text ──
-# Keyword-based detection (same approach as the mock, but as fallback)
-# The real detection happens via ASR model output language metadata
+# ── Language detection from text (keyword-based router) ──
+# Used to determine which language to force on the model.
+# Per the technical guide: never rely on Whisper's auto-detection.
 LANGUAGE_KEYWORDS = {
     "en-NG": ["the", "is", "are", "was", "were", "have", "has", "please", "account", "balance",
               "transfer", "limit", "money", "bank", "error", "morning", "afternoon",
@@ -154,7 +171,12 @@ LANGUAGE_KEYWORDS = {
 
 
 def detect_language_from_text(text: str) -> dict:
-    """Detect language from text using keyword matching with word boundaries."""
+    """Detect language from text using keyword matching with word boundaries.
+
+    This is the language router — it determines which language to force
+    on the STORM-OS-ASR-SMALL model. Per the technical guide, Whisper's
+    auto-detection is unreliable for these languages.
+    """
     lower = text.lower()
     words = set(re.split(r'[\s,.;:!?\'"\-()]+', lower))
     words = {w for w in words if w}
@@ -190,32 +212,36 @@ def detect_language_from_text(text: str) -> dict:
 # ── Transcribe audio file ──
 def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     """
-    Transcribe an audio file using the appropriate model.
+    Transcribe an audio file using STORM-OS-ASR-SMALL.
+
+    Per the technical guide:
+      - Language is always forced via forced_decoder_ids (never auto-detect)
+      - The pipeline handles chunking and stitching automatically
 
     Args:
-        audio_path: Path to audio file (wav, mp3, etc.)
-        language: Adunni LanguageCode (e.g. "yo", "en-NG"). If None, auto-detect.
+        audio_path: Path to audio file (wav, 16kHz mono preferred)
+        language: Adunni LanguageCode (e.g. "yo", "en-NG"). If None, defaults to "en-NG".
 
     Returns:
         { text, language, confidence }
     """
-    if language is None or language not in LANG_TO_MODEL:
-        # Default to English/Whisper for auto-detect
+    if language is None or language not in LANG_TO_WHISPER_CODE:
         language = "en-NG"
 
-    model_id = LANG_TO_MODEL[language]
-    model = _load_model(model_id)
+    pipeline, processor = _load_asr_pipeline()
+    forced_decoder_ids = _build_forced_decoder_ids(processor, language)
 
-    if "openai/whisper" in model_id:
-        # stable_whisper model
-        result = model.transcribe(audio_path)
-        text = result.text.strip()
-    else:
-        # HuggingFace pipeline
-        prediction = model(audio_path, return_timestamps=False)
-        text = prediction["text"].strip()
+    # Use the pipeline with forced language (Option C from the technical guide)
+    result = pipeline(
+        audio_path,
+        generate_kwargs={
+            "forced_decoder_ids": forced_decoder_ids,
+            "max_new_tokens": 225,
+        },
+    )
+    text = result["text"].strip()
 
-    # Detect language from the transcribed text
+    # Detect language from the transcribed text (for metadata/logging)
     detected = detect_language_from_text(text)
 
     return {
@@ -225,8 +251,156 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     }
 
 
+# ── Energy-based VAD (Voice Activity Detection) ──
+# Simple but effective: computes RMS energy and detects speech vs silence
+# No additional model download needed — uses numpy only
+
+VAD_FRAME_MS = 30  # 30ms frames
+VAD_ENERGY_THRESHOLD = 0.01  # RMS threshold for speech detection
+VAD_SILENCE_FRAMES = 50  # ~1.5s of silence to mark end of speech
+
+
+def detect_speech_segments(audio_bytes: bytes, sample_rate: int = 16000) -> dict:
+    """
+    Energy-based VAD: detect if audio contains speech and where speech segments are.
+
+    Returns:
+        { has_speech, speech_ratio, segments: [{start_ms, end_ms}] }
+    """
+    try:
+        if len(audio_bytes) < 4:
+            return {"has_speech": False, "speech_ratio": 0.0, "segments": []}
+
+        audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+        if len(audio_array) == 0:
+            return {"has_speech": False, "speech_ratio": 0.0, "segments": []}
+
+        frame_size = int(sample_rate * VAD_FRAME_MS / 1000)
+        num_frames = len(audio_array) // frame_size
+
+        if num_frames == 0:
+            rms = float(np.sqrt(np.mean(audio_array ** 2)))
+            return {
+                "has_speech": rms > VAD_ENERGY_THRESHOLD,
+                "speech_ratio": 1.0 if rms > VAD_ENERGY_THRESHOLD else 0.0,
+                "segments": [{"start_ms": 0, "end_ms": int(len(audio_array) / sample_rate * 1000)}] if rms > VAD_ENERGY_THRESHOLD else [],
+            }
+
+        energies = []
+        for i in range(num_frames):
+            frame = audio_array[i * frame_size : (i + 1) * frame_size]
+            rms = float(np.sqrt(np.mean(frame ** 2)))
+            energies.append(rms)
+
+        segments = []
+        in_speech = False
+        seg_start = 0
+        silence_count = 0
+
+        for i, energy in enumerate(energies):
+            if energy > VAD_ENERGY_THRESHOLD:
+                if not in_speech:
+                    in_speech = True
+                    seg_start = i
+                silence_count = 0
+            else:
+                if in_speech:
+                    silence_count += 1
+                    if silence_count >= VAD_SILENCE_FRAMES:
+                        seg_end = i - silence_count
+                        segments.append({
+                            "start_ms": seg_start * VAD_FRAME_MS,
+                            "end_ms": seg_end * VAD_FRAME_MS,
+                        })
+                        in_speech = False
+                        silence_count = 0
+
+        if in_speech:
+            segments.append({
+                "start_ms": seg_start * VAD_FRAME_MS,
+                "end_ms": num_frames * VAD_FRAME_MS,
+            })
+
+        speech_frames = sum(1 for e in energies if e > VAD_ENERGY_THRESHOLD)
+        speech_ratio = speech_frames / num_frames if num_frames > 0 else 0.0
+
+        return {
+            "has_speech": speech_ratio > 0.05,
+            "speech_ratio": speech_ratio,
+            "segments": segments,
+        }
+    except Exception as e:
+        log.error(f"VAD error: {e}")
+        return {"has_speech": True, "speech_ratio": 1.0, "segments": []}
+
+
+# ── Partial transcription for streaming ──
+def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Optional[str] = None) -> dict:
+    """
+    Transcribe a partial audio chunk for streaming display.
+    Uses the same STORM-OS-ASR-SMALL pipeline with forced language.
+
+    Returns:
+        { text, language, confidence, is_partial: True }
+    """
+    if len(audio_bytes) < 200:
+        return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
+
+    if language is None or language not in LANG_TO_WHISPER_CODE:
+        language = "en-NG"
+
+    suffix = f".{encoding}" if encoding else ".webm"
+    raw_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    raw_file.write(audio_bytes)
+    raw_file.close()
+
+    wav_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    wav_file.close()
+
+    cleanup = [raw_file.name, wav_file.name]
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", raw_file.name, "-ar", "16000", "-ac", "1", wav_file.name],
+            capture_output=True, timeout=10
+        )
+        if result.returncode != 0:
+            return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
+
+        pipeline, processor = _load_asr_pipeline()
+        forced_decoder_ids = _build_forced_decoder_ids(processor, language)
+
+        result = pipeline(
+            wav_file.name,
+            generate_kwargs={
+                "forced_decoder_ids": forced_decoder_ids,
+                "max_new_tokens": 225,
+            },
+        )
+        text = result["text"].strip()
+
+        if text:
+            detected = detect_language_from_text(text)
+            return {
+                "text": text,
+                "language": detected["language"],
+                "confidence": detected["confidence"],
+                "is_partial": True,
+            }
+        return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
+    except Exception as e:
+        log.error(f"Partial transcription failed: {e}")
+        return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
+    finally:
+        for f in cleanup:
+            if os.path.exists(f):
+                os.unlink(f)
+
+
 # ── FastAPI app ──
-app = FastAPI(title="Àdùnní ASR Engine", version="1.0.0")
+app = FastAPI(title="Àdùnní ASR Engine", version="2.0.0")
 
 
 class DetectRequest(BaseModel):
@@ -240,26 +414,33 @@ class TranscribeRequest(BaseModel):
     encoding: Optional[str] = "wav"
 
 
-# ── Translation (Meta NLLB — No Language Left Behind) ──
-# Single model handles all 200 languages bidirectionally
-# https://huggingface.co/facebook/nllb-200-distilled-600M
+class VadRequest(BaseModel):
+    audio_base64: str
+    encoding: Optional[str] = "pcm16"
+    sample_rate: Optional[int] = 16000
 
+
+class PartialTranscribeRequest(BaseModel):
+    audio_base64: str
+    encoding: Optional[str] = "webm"
+    language: Optional[str] = None
+
+
+# ── Translation (Meta NLLB — No Language Left Behind) ──
 NLLB_MODEL = "facebook/nllb-200-distilled-600M"
 
-# Adunni LanguageCode -> NLLB FLORES-200 code
 NLLB_LANG_MAP = {
     "en-NG": "eng_Latn",
     "yo":    "yor_Latn",
     "ha":    "hau_Latn",
     "ig":    "ibo_Latn",
-    "pcm":   "pcm_Latn",  # Nigerian Pidgin
+    "pcm":   "pcm_Latn",
 }
 
 _nllb_translator = None
 
 
 def _load_nllb():
-    """Load the NLLB translation pipeline (cached singleton)."""
     global _nllb_translator
     if _nllb_translator is None:
         from transformers import pipeline as hf_pipeline
@@ -274,13 +455,6 @@ def _load_nllb():
 
 
 def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
-    """
-    Translate text from source_lang to target_lang using NLLB.
-
-    Returns:
-        { translated_text, source_language, target_language, model }
-    """
-    # No translation needed if same language
     if source_lang == target_lang:
         return {
             "translated_text": text,
@@ -289,7 +463,6 @@ def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
             "model": "none",
         }
 
-    # Map Adunni codes to NLLB FLORES-200 codes
     src_flores = NLLB_LANG_MAP.get(source_lang, "eng_Latn")
     tgt_flores = NLLB_LANG_MAP.get(target_lang, "eng_Latn")
 
@@ -320,10 +493,11 @@ async def health():
     return {
         "status": "ok",
         "provider": {
-            "name": "ncair1-whisper",
+            "name": "storm-os-asr-small",
+            "model": STORM_MODEL_ID,
             "supportedLanguages": SUPPORTED_LANGUAGES,
             "device": DEVICE,
-            "modelsLoaded": list(_loaded_models.keys()),
+            "pipelineLoaded": _asr_pipeline is not None,
         },
     }
 
@@ -332,12 +506,13 @@ async def health():
 async def info():
     return {
         "provider": {
-            "name": "ncair1-whisper",
+            "name": "storm-os-asr-small",
+            "model": STORM_MODEL_ID,
             "supportedLanguages": SUPPORTED_LANGUAGES,
             "device": DEVICE,
         },
         "supportedLanguages": SUPPORTED_LANGUAGES,
-        "models": LANG_TO_MODEL,
+        "languageCodes": LANG_TO_WHISPER_CODE,
     }
 
 
@@ -367,7 +542,6 @@ async def transcribe(req: TranscribeRequest):
     audio_path = req.audio_path
     cleanup_files = []
 
-    # Decode base64 audio to temp file if needed
     if req.audio_base64:
         audio_bytes = base64.b64decode(req.audio_base64)
         encoding = req.encoding or "wav"
@@ -378,7 +552,6 @@ async def transcribe(req: TranscribeRequest):
         cleanup_files.append(raw_file.name)
         audio_path = raw_file.name
 
-        # Convert to WAV if not already (whisper/transformers need wav)
         if encoding != "wav":
             wav_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             wav_file.close()
@@ -407,11 +580,32 @@ async def transcribe(req: TranscribeRequest):
                 os.unlink(f)
 
 
+@app.post("/vad")
+async def vad_endpoint(req: VadRequest):
+    """Voice Activity Detection — check if audio chunk contains speech."""
+    if not req.audio_base64:
+        raise HTTPException(status_code=400, detail="audio_base64 is required")
+    audio_bytes = base64.b64decode(req.audio_base64)
+    result = detect_speech_segments(audio_bytes, req.sample_rate or 16000)
+    return result
+
+
+@app.post("/transcribe/partial")
+async def transcribe_partial_endpoint(req: PartialTranscribeRequest):
+    """Partial (streaming) transcription — returns interim results for display."""
+    if not req.audio_base64:
+        raise HTTPException(status_code=400, detail="audio_base64 is required")
+    audio_bytes = base64.b64decode(req.audio_base64)
+    result = transcribe_partial(audio_bytes, req.encoding or "webm", req.language)
+    return result
+
+
 @app.on_event("startup")
 async def startup():
     log.info(f"ASR Engine starting on port {PORT} (device={DEVICE})")
+    log.info(f"Model: {STORM_MODEL_ID}")
     log.info(f"Supported languages: {SUPPORTED_LANGUAGES}")
-    log.info(f"Models: {LANG_TO_MODEL}")
+    log.info(f"Language codes: {LANG_TO_WHISPER_CODE}")
 
 
 if __name__ == "__main__":

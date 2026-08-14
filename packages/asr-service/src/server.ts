@@ -52,6 +52,48 @@ app.post('/transcribe', async (req, res) => {
   }
 });
 
+// Proxy /transcribe/partial for streaming partial transcripts
+app.post('/transcribe/partial', async (req, res) => {
+  const engineUrl = process.env.ASR_ENGINE_URL;
+  if (!engineUrl) {
+    return res.status(501).json({ error: 'ASR engine not configured' });
+  }
+  try {
+    const resp = await fetch(`${engineUrl}/transcribe/partial`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await resp.text();
+    res.status(resp.status).type('json').send(data);
+  } catch (err) {
+    console.error('[asr] partial transcribe proxy error:', err);
+    res.status(502).json({ error: 'ASR engine unreachable' });
+  }
+});
+
+// Proxy /vad for voice activity detection
+app.post('/vad', async (req, res) => {
+  const engineUrl = process.env.ASR_ENGINE_URL;
+  if (!engineUrl) {
+    return res.status(501).json({ error: 'ASR engine not configured' });
+  }
+  try {
+    const resp = await fetch(`${engineUrl}/vad`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = await resp.text();
+    res.status(resp.status).type('json').send(data);
+  } catch (err) {
+    console.error('[asr] VAD proxy error:', err);
+    res.status(502).json({ error: 'ASR engine unreachable' });
+  }
+});
+
 app.post('/translate', async (req, res) => {
   const engineUrl = process.env.ASR_ENGINE_URL;
   if (!engineUrl) {
