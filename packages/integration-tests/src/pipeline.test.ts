@@ -235,6 +235,25 @@ describe('Orchestrator Service', () => {
     }
   });
 
+  test('responds explicitly to unsupported bank statement requests', async () => {
+    const request: OrchestratorRequest = {
+      sessionId: 'test-4b',
+      clientId: 'savanna-bank',
+      config: SAVANNA_CONFIG,
+      context: emptyContext('test-4b'),
+      userUtterance: 'I would like my bank statement',
+      detectedLanguage: 'en-NG',
+      languageConfidence: 0.9,
+    };
+
+    const response = await orchestrator.process(request);
+    expect(response.decision.type).toBe('respond');
+    if (response.decision.type === 'respond') {
+      expect(response.decision.text).toContain('Bank statements are not available yet');
+      expect(response.decision.text).toContain('human agent');
+    }
+  });
+
   test('handles confirmation flow', async () => {
     const contextWithPending: ConversationContext = {
       ...emptyContext('test-5'),

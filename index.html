@@ -336,6 +336,7 @@
   var speechSynthesis = window.speechSynthesis || null;
   var usingWebSpeech = false;
   var currentAiUtterance = null;
+  var aiSpeechFallbackTimer = null;
 
   // ── Video state ──
   var dailyCall = null;
@@ -620,6 +621,10 @@
         aiSpeaking = false;
         userSpeaking = false;
         transcribing = false;
+        if (aiSpeechFallbackTimer) {
+          clearTimeout(aiSpeechFallbackTimer);
+          aiSpeechFallbackTimer = null;
+        }
         if (isRecording) stopRecording();
         leaveVideoRoom();
         setConnStatus('disconnected', 'OFFLINE');
@@ -928,10 +933,21 @@
         var activeLangs = turn.language ? [turn.language] : [];
         renderLangChips(activeLangs);
 
-        // Speak the AI response using Web Speech API only as fallback
-        // (if STORM TTS is available, real audio will arrive as an 'audio' message)
-        if (!videoConversation && speechSynthesis && !window._stormTtsActive) {
-          speakText(turn.text, turn.language);
+        if (aiSpeechFallbackTimer) {
+          clearTimeout(aiSpeechFallbackTimer);
+          aiSpeechFallbackTimer = null;
+        }
+
+        // Prefer real TTS audio when available. If it never arrives, fall back to browser speech.
+        if (!videoConversation && speechSynthesis) {
+          if (!window._stormTtsActive) {
+            speakText(turn.text, turn.language);
+          } else {
+            aiSpeechFallbackTimer = setTimeout(function() {
+              aiSpeechFallbackTimer = null;
+              if (aiSpeaking) speakText(turn.text, turn.language);
+            }, 1800);
+          }
         }
 
         updateUI();
@@ -976,6 +992,10 @@
 
     } else if (msg.type === 'audio') {
       // TTS audio response from AI — play it
+      if (aiSpeechFallbackTimer) {
+        clearTimeout(aiSpeechFallbackTimer);
+        aiSpeechFallbackTimer = null;
+      }
       // Cancel browser SpeechSynthesis since we have real audio
       if (speechSynthesis) speechSynthesis.cancel();
       if (msg.audioBase64) {
@@ -1021,6 +1041,10 @@
   // ── End the call ──
   function endCall() {
     if (isRecording) stopRecording();
+    if (aiSpeechFallbackTimer) {
+      clearTimeout(aiSpeechFallbackTimer);
+      aiSpeechFallbackTimer = null;
+    }
     if (speechSynthesis) speechSynthesis.cancel();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'end' }));
@@ -1091,6 +1115,10 @@
     if (el.avatarVideo) {
       el.avatarVideo.classList.remove('active');
       el.avatarVideo.srcObject = null;
+    }
+    if (aiSpeechFallbackTimer) {
+      clearTimeout(aiSpeechFallbackTimer);
+      aiSpeechFallbackTimer = null;
     }
     if (speechSynthesis) speechSynthesis.cancel();
     videoConversation = null;
