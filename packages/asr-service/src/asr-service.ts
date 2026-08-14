@@ -245,11 +245,8 @@ export class AsrServiceImpl implements AsrService {
       }
     }
 
-    // Fallback: use mock keyword-based detection
-    if (this.provider instanceof MockAsrProvider) {
-      return this.provider.detectLanguageFromText(text);
-    }
-    return { language: 'en-NG', confidence: 0.5 };
+    // Fallback: always use keyword-based detection (works for any provider)
+    return new MockAsrProvider().detectLanguageFromText(text);
   }
 
   getProviderInfo() {
