@@ -539,10 +539,12 @@ def _detect_language_acoustic(audio_path: str) -> str:
 
 def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     """
-    Hybrid transcription pipeline:
-      1. Groq Whisper Large v3 (primary) — fast, accurate, auto language detection
-      2. NCAIR1 (specialized) — re-transcribe pure Yoruba/Igbo/Hausa for better accuracy
-      3. STORM-OS-ASR-SMALL (fallback) — if Groq is unavailable
+    Transcribe audio using NCAIR1/STORM models (Nigerian-language-tuned).
+
+    Flow:
+      - If language is known and is yo/ig/ha: try NCAIR1 first, then STORM
+      - If language is known (en-NG/pcm): STORM with forced language
+      - If language is unknown: STORM auto-detect, then keyword-based re-transcribe
 
     Args:
         audio_path: Path to audio file (wav, 16kHz mono preferred)
@@ -551,77 +553,70 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     Returns:
         { text, language, confidence, provider }
     """
-    # ── Tier 1: Try Groq Whisper Large v3 first ──
-    groq_result = _groq_transcribe(audio_path, language)
-    if groq_result and groq_result["text"]:
-        groq_lang = groq_result["language"]
-
-        # ── Tier 2: If Groq detected pure Yoruba/Igbo/Hausa, try NCAIR1 for better accuracy ──
-        # NCAIR1 models are domain-tuned and may be more accurate for pure Nigerian languages
-        if groq_lang in ("yo", "ig", "ha"):
-            ncair = _load_ncair_pipeline(groq_lang)
+    if language is not None and language in LANG_TO_WHISPER_CODE:
+        # Language known — try NCAIR1 for yo/ig/ha, STORM for en-NG/pcm
+        if language in ("yo", "ig", "ha"):
+            ncair = _load_ncair_pipeline(language)
             if ncair is not None:
                 try:
                     pipe, _ = ncair
-                    ncair_result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
-                    ncair_text = _clean_transcript(ncair_result["text"])
-                    # Use NCAIR1 result if it's reasonably long (not garbage)
-                    if ncair_text and len(ncair_text) >= len(groq_result["text"]) * 0.5:
-                        log.info(f"NCAIR1 re-transcribe for {groq_lang}: \"{ncair_text[:80]}\"")
-                        detected = detect_language_from_text(ncair_text)
+                    result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
+                    text = _clean_transcript(result["text"])
+                    if text:
+                        detected = detect_language_from_text(text)
+                        log.info(f"NCAIR1 transcribed ({language}): \"{text[:80]}\"")
                         return {
-                            "text": ncair_text,
+                            "text": text,
                             "language": detected["language"],
-                            "confidence": 0.93,
+                            "confidence": detected["confidence"],
                             "provider": "ncair1",
                         }
                 except Exception as e:
-                    log.warning(f"NCAIR1 re-transcribe failed for {groq_lang}: {e}")
+                    log.warning(f"NCAIR1 failed for {language}: {e}")
 
-        # Groq result is good enough (especially for English, Pidgin, mixed speech)
-        return groq_result
-
-    # ── Tier 3: Groq failed — fall back to local STORM/NCAIR1 ──
-    log.warning("Groq unavailable, falling back to local STORM/NCAIR1 models")
-
-    if language is not None and language in LANG_TO_WHISPER_CODE:
-        # Language known — try NCAIR1 first, then STORM
-        ncair = _load_ncair_pipeline(language)
-        if ncair is not None:
-            try:
-                pipe, _ = ncair
-                result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
-                text = _clean_transcript(result["text"])
-                if text:
-                    detected = detect_language_from_text(text)
-                    return {
-                        "text": text,
-                        "language": detected["language"],
-                        "confidence": detected["confidence"],
-                        "provider": "ncair1-fallback",
-                    }
-            except Exception as e:
-                log.warning(f"NCAIR1 failed for {language}: {e}")
-
-        # STORM fallback with forced language
+        # STORM with forced language
         text = _transcribe_with_language(audio_path, language)
         detected = detect_language_from_text(text) if text else {"language": language, "confidence": 0.5}
         return {
             "text": text,
             "language": detected["language"],
             "confidence": detected["confidence"],
-            "provider": "storm-fallback",
+            "provider": "storm",
         }
 
     # Language unknown — STORM auto-detect
-    log.info("ASR fallback: language unknown, transcribing with auto-detection")
+    log.info("ASR: language unknown, transcribing with auto-detection")
     text = _transcribe_auto(audio_path)
 
     text_detected = detect_language_from_text(text) if text else {"language": "en-NG", "confidence": 0.5}
     detected_lang = text_detected["language"]
 
+    # If keyword detection suggests a Nigerian language with high confidence,
+    # re-transcribe with that language forced (and try NCAIR1 for yo/ig/ha)
     if detected_lang != "en-NG" and text_detected["confidence"] > 0.6:
-        log.info(f"ASR fallback: keyword detected {detected_lang}, re-transcribing")
+        log.info(f"ASR: keyword detected {detected_lang} (conf={text_detected['confidence']:.2f}), re-transcribing")
+
+        # Try NCAIR1 for pure Nigerian languages
+        if detected_lang in ("yo", "ig", "ha"):
+            ncair = _load_ncair_pipeline(detected_lang)
+            if ncair is not None:
+                try:
+                    pipe, _ = ncair
+                    result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
+                    text2 = _clean_transcript(result["text"])
+                    if text2 and len(text2) >= len(text) * 0.3:
+                        log.info(f"NCAIR1 re-transcribe for {detected_lang}: \"{text2[:80]}\"")
+                        detected = detect_language_from_text(text2)
+                        return {
+                            "text": text2,
+                            "language": detected["language"],
+                            "confidence": detected["confidence"],
+                            "provider": "ncair1",
+                        }
+                except Exception as e:
+                    log.warning(f"NCAIR1 re-transcribe failed for {detected_lang}: {e}")
+
+        # STORM re-transcribe with detected language
         text2 = _transcribe_with_language(audio_path, detected_lang)
         if text2 and len(text2) >= len(text) * 0.3:
             text = text2
@@ -632,7 +627,7 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
         "text": text,
         "language": final_detected["language"],
         "confidence": final_detected["confidence"],
-        "provider": "storm-fallback",
+        "provider": "storm",
     }
 
 
@@ -723,8 +718,7 @@ def detect_speech_segments(audio_bytes: bytes, sample_rate: int = 16000) -> dict
 # ── Partial transcription for streaming ──
 def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Optional[str] = None) -> dict:
     """
-    Partial transcription for streaming display.
-    Tries Groq first (fast, <0.5s), falls back to local STORM if Groq fails.
+    Partial transcription for streaming display using STORM/NCAIR1 models.
 
     Returns:
         { text, language, confidence, is_partial: True }
@@ -751,13 +745,7 @@ def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Opt
         if result.returncode != 0:
             return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
 
-        # ── Try Groq first for fast partial transcription ──
-        groq_result = _groq_transcribe(wav_file.name, language)
-        if groq_result and groq_result["text"]:
-            groq_result["is_partial"] = True
-            return groq_result
-
-        # ── Groq failed — fall back to local STORM ──
+        # Determine which language to force
         use_lang = language if (language and language in LANG_TO_WHISPER_CODE) else "en-NG"
         do_two_pass = language is None or language not in LANG_TO_WHISPER_CODE
 
@@ -765,6 +753,7 @@ def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Opt
 
         if do_two_pass and text:
             detected = detect_language_from_text(text)
+            # Only re-transcribe if strong non-English signal (confidence > 0.7)
             if detected["language"] != "en-NG" and detected["confidence"] > 0.7:
                 log.info(f"Partial two-pass: detected {detected['language']}, re-transcribing")
                 text = _transcribe_with_language(wav_file.name, detected["language"])
@@ -888,12 +877,11 @@ async def health():
     return {
         "status": "ok",
         "provider": {
-            "name": "groq-whisper-large-v3" if GROQ_API_KEY else "storm-os-asr-small",
-            "model": GROQ_WHISPER_MODEL if GROQ_API_KEY else STORM_MODEL_ID,
+            "name": "ncair1-storm",
+            "model": STORM_MODEL_ID,
             "supportedLanguages": SUPPORTED_LANGUAGES,
-            "device": "groq-lpu" if GROQ_API_KEY else DEVICE,
+            "device": DEVICE,
             "pipelineLoaded": _asr_pipeline is not None,
-            "groqAvailable": bool(GROQ_API_KEY),
         },
     }
 
@@ -999,13 +987,7 @@ async def transcribe_partial_endpoint(req: PartialTranscribeRequest):
 @app.on_event("startup")
 async def startup():
     log.info(f"ASR Engine starting on port {PORT} (device={DEVICE})")
-    if GROQ_API_KEY:
-        log.info(f"Primary ASR: Groq {GROQ_WHISPER_MODEL} (LPU, 300x real-time)")
-        log.info(f"Specialized: NCAIR1 for pure yo/ig/ha")
-        log.info(f"Fallback: {STORM_MODEL_ID}")
-    else:
-        log.info(f"Primary ASR: {STORM_MODEL_ID} (no GROQ_API_KEY set)")
-        log.info("Set GROQ_API_KEY for whisper-large-v3 (better accuracy + speed)")
+    log.info(f"Primary ASR: NCAIR1 (yo/ig/ha) + {STORM_MODEL_ID} (en-NG/pcm)")
     log.info(f"Supported languages: {SUPPORTED_LANGUAGES}")
     log.info(f"Language codes: {LANG_TO_WHISPER_CODE}")
 
