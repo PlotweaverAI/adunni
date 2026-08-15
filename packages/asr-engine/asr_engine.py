@@ -79,6 +79,17 @@ WHISPER_TO_ADUNNI_CODE = {
 }
 
 
+def _force_ipv4():
+    """Force IPv4 for all socket connections (VPS IPv6 is geo-blocked by some APIs)."""
+    import socket
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _ipv4_getaddrinfo(host, port, *args, **kwargs):
+        results = _orig_getaddrinfo(host, port, *args, **kwargs)
+        ipv4 = [r for r in results if r[0] == socket.AF_INET]
+        return ipv4 if ipv4 else results
+    socket.getaddrinfo = _ipv4_getaddrinfo
+
+
 def _groq_transcribe(audio_path: str, language: Optional[str] = None) -> Optional[dict]:
     """
     Transcribe audio using Groq Whisper Large v3 API.
@@ -94,6 +105,7 @@ def _groq_transcribe(audio_path: str, language: Optional[str] = None) -> Optiona
         return None
 
     try:
+        _force_ipv4()
         import urllib.request
         import urllib.error
         import mimetypes
@@ -135,13 +147,14 @@ def _groq_transcribe(audio_path: str, language: Optional[str] = None) -> Optiona
 
         body = b"".join(body_parts)
 
-        # Make request
+        # Make request — use curl User-Agent to avoid Cloudflare 1010 blocking
         req = urllib.request.Request(
             GROQ_API_URL,
             data=body,
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "curl/8.5.0",
             },
             method="POST",
         )
