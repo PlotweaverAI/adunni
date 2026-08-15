@@ -1,14 +1,15 @@
 """
 asr_engine.py — Python ASR microservice for Àdùnní
 
-Uses STORM-OS-ASR-SMALL (wolethereader/STORM-OS-ASR-SMALL) — a single Whisper-small
-LoRA-fine-tuned model covering all five Nigerian languages:
-  yo (Yoruba), ha (Hausa), ig (Igbo), pcm (Nigerian Pidgin), en (Nigerian English)
+Hybrid ASR pipeline with three tiers:
+  1. Groq Whisper Large v3 (primary) — fast, accurate, built-in language detection
+  2. NCAIR1 per-language models (specialized) — domain-tuned for pure Yoruba/Igbo/Hausa
+  3. STORM-OS-ASR-SMALL (fallback) — single model for all 5 Nigerian languages
 
-Per the model's technical usage guide:
-  - Always force the language explicitly via forced_decoder_ids (never auto-detect)
-  - Use the transformers pipeline with chunk_length_s=30, stride_length_s=5
-  - Audio must be 16kHz mono
+Flow:
+  - Audio → Groq large-v3 (detects language + transcribes in <0.5s)
+  - If Groq detects pure yo/ig/ha → NCAIR1 re-transcribe (more accurate for those)
+  - If Groq fails → fall back to local STORM/NCAIR1
 
 Endpoints:
   GET  /health            — service health + provider info
@@ -19,8 +20,9 @@ Endpoints:
   POST /vad               — { audio_base64 } -> { has_speech, speech_ratio, segments }
   POST /translate         — { text, source_language, target_language } -> translated text
 
-Models are downloaded from HuggingFace on first use (cached locally).
-Set HF_TOKEN env var if any models require gated access.
+Set GROQ_API_KEY for Groq Whisper Large v3 (primary ASR).
+Set HF_TOKEN for NCAIR1 gated models.
+Set HF_TOKEN_STORM for wolethereader org models (STORM-OS-ASR-SMALL).
 """
 
 import os
@@ -28,6 +30,7 @@ import re
 import base64
 import tempfile
 import logging
+import json as _json
 import numpy as np
 from typing import Optional
 
@@ -41,10 +44,13 @@ log = logging.getLogger("asr-engine")
 
 # ── Config ──
 PORT = int(os.getenv("PORT", "3010"))
+# Groq API key for Whisper Large v3 (primary ASR)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
+GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 # Primary HF token (for NCAIR1 gated models)
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 # Secondary token for wolethereader org models (STORM-OS-ASR-SMALL)
-# The fine-grained NCAIR1 token doesn't have wolethereader org access, so we use a separate token
 HF_TOKEN_STORM = os.getenv("HF_TOKEN_STORM", HF_TOKEN)
 
 
@@ -57,6 +63,118 @@ def _torch_cuda_available() -> bool:
 
 
 DEVICE = "cuda" if _torch_cuda_available() else "cpu"
+
+
+# ── Groq Whisper Large v3 (primary ASR) ──
+# Groq runs whisper-large-v3 on LPU hardware — 300x real-time, sub-second latency.
+# Free tier: 2,000 req/day, 28,800 audio seconds/day (8 hours).
+
+# Whisper language code -> Adunni LanguageCode
+WHISPER_TO_ADUNNI_CODE = {
+    "en": "en-NG",
+    "yo": "yo",
+    "ha": "ha",
+    "ig": "ig",
+    "pcm": "pcm",  # Pidgin may be detected as "en" by large-v3
+}
+
+
+def _groq_transcribe(audio_path: str, language: Optional[str] = None) -> Optional[dict]:
+    """
+    Transcribe audio using Groq Whisper Large v3 API.
+
+    Args:
+        audio_path: Path to audio file (any format Groq supports: wav, mp3, flac, etc.)
+        language: Optional language hint (Adunni code). If None, Groq auto-detects.
+
+    Returns:
+        { text, language, confidence, provider: "groq" } or None if Groq fails.
+    """
+    if not GROQ_API_KEY:
+        return None
+
+    try:
+        import urllib.request
+        import urllib.error
+        import mimetypes
+
+        # Build multipart/form-data request
+        boundary = "----AdunniBoundary7MA4YWxkTrZu0gW"
+        filename = os.path.basename(audio_path)
+
+        # Determine content type
+        ext = os.path.splitext(filename)[1].lower()
+        content_type_map = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".flac": "audio/flac", ".webm": "audio/webm", ".ogg": "audio/ogg", ".m4a": "audio/mp4"}
+        ct = content_type_map.get(ext, "audio/wav")
+
+        with open(audio_path, "rb") as f:
+            audio_data = f.read()
+
+        # Build form fields
+        fields = []
+        # Model field
+        fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n{GROQ_WHISPER_MODEL}\r\n')
+        # Response format: verbose_json to get language detection
+        fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\nverbose_json\r\n')
+        # Temperature
+        fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="temperature"\r\n\r\n0.0\r\n')
+
+        # Language hint (convert Adunni code to Whisper code)
+        if language and language in LANG_TO_WHISPER_CODE:
+            whisper_lang = LANG_TO_WHISPER_CODE[language]
+            fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n{whisper_lang}\r\n')
+
+        body_parts = []
+        for field in fields:
+            body_parts.append(field.encode("utf-8"))
+
+        # Audio file field
+        body_parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\nContent-Type: {ct}\r\n\r\n'.encode("utf-8"))
+        body_parts.append(audio_data)
+        body_parts.append(f'\r\n--{boundary}--\r\n'.encode("utf-8"))
+
+        body = b"".join(body_parts)
+
+        # Make request
+        req = urllib.request.Request(
+            GROQ_API_URL,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = _json.loads(resp.read().decode("utf-8"))
+
+        text = result.get("text", "").strip()
+        detected_lang = result.get("language", "en")
+
+        # Map Whisper language code to Adunni code
+        adunni_lang = WHISPER_TO_ADUNNI_CODE.get(detected_lang, "en-NG")
+
+        # If text is empty, return empty result
+        if not text:
+            return {"text": "", "language": adunni_lang, "confidence": 0.5, "provider": "groq"}
+
+        log.info(f"Groq transcribed: lang={adunni_lang} text=\"{text[:80]}\"")
+
+        return {
+            "text": text,
+            "language": adunni_lang,
+            "confidence": 0.95,  # Groq large-v3 is very accurate
+            "provider": "groq",
+        }
+
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")[:200]
+        log.warning(f"Groq API error: {e.code} {err_body}")
+        return None
+    except Exception as e:
+        log.warning(f"Groq transcription failed: {e}")
+        return None
 
 # ── Model registry ──
 # Per-language ASR models from NCAIR1 (dedicated, fine-tuned for each language)
@@ -408,48 +526,89 @@ def _detect_language_acoustic(audio_path: str) -> str:
 
 def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     """
-    Transcribe an audio file using STORM-OS-ASR-SMALL.
-
-    Per the technical guide:
-      - Language is always forced via forced_decoder_ids (never auto-detect)
-      - The pipeline handles chunking and stitching automatically
-
-    Two-pass approach when language is unknown (first utterance):
-      1. Transcribe with English forced to get rough text
-      2. Detect language from that text using keyword matching
-      3. If detected language differs, re-transcribe with correct language forced
+    Hybrid transcription pipeline:
+      1. Groq Whisper Large v3 (primary) — fast, accurate, auto language detection
+      2. NCAIR1 (specialized) — re-transcribe pure Yoruba/Igbo/Hausa for better accuracy
+      3. STORM-OS-ASR-SMALL (fallback) — if Groq is unavailable
 
     Args:
         audio_path: Path to audio file (wav, 16kHz mono preferred)
-        language: Adunni LanguageCode (e.g. "yo", "en-NG"). If None, two-pass detection.
+        language: Adunni LanguageCode (e.g. "yo", "en-NG"). If None, auto-detect.
 
     Returns:
-        { text, language, confidence }
+        { text, language, confidence, provider }
     """
+    # ── Tier 1: Try Groq Whisper Large v3 first ──
+    groq_result = _groq_transcribe(audio_path, language)
+    if groq_result and groq_result["text"]:
+        groq_lang = groq_result["language"]
+
+        # ── Tier 2: If Groq detected pure Yoruba/Igbo/Hausa, try NCAIR1 for better accuracy ──
+        # NCAIR1 models are domain-tuned and may be more accurate for pure Nigerian languages
+        if groq_lang in ("yo", "ig", "ha"):
+            ncair = _load_ncair_pipeline(groq_lang)
+            if ncair is not None:
+                try:
+                    pipe, _ = ncair
+                    ncair_result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
+                    ncair_text = _clean_transcript(ncair_result["text"])
+                    # Use NCAIR1 result if it's reasonably long (not garbage)
+                    if ncair_text and len(ncair_text) >= len(groq_result["text"]) * 0.5:
+                        log.info(f"NCAIR1 re-transcribe for {groq_lang}: \"{ncair_text[:80]}\"")
+                        detected = detect_language_from_text(ncair_text)
+                        return {
+                            "text": ncair_text,
+                            "language": detected["language"],
+                            "confidence": 0.93,
+                            "provider": "ncair1",
+                        }
+                except Exception as e:
+                    log.warning(f"NCAIR1 re-transcribe failed for {groq_lang}: {e}")
+
+        # Groq result is good enough (especially for English, Pidgin, mixed speech)
+        return groq_result
+
+    # ── Tier 3: Groq failed — fall back to local STORM/NCAIR1 ──
+    log.warning("Groq unavailable, falling back to local STORM/NCAIR1 models")
+
     if language is not None and language in LANG_TO_WHISPER_CODE:
-        # Language known — single pass with forced language
+        # Language known — try NCAIR1 first, then STORM
+        ncair = _load_ncair_pipeline(language)
+        if ncair is not None:
+            try:
+                pipe, _ = ncair
+                result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
+                text = _clean_transcript(result["text"])
+                if text:
+                    detected = detect_language_from_text(text)
+                    return {
+                        "text": text,
+                        "language": detected["language"],
+                        "confidence": detected["confidence"],
+                        "provider": "ncair1-fallback",
+                    }
+            except Exception as e:
+                log.warning(f"NCAIR1 failed for {language}: {e}")
+
+        # STORM fallback with forced language
         text = _transcribe_with_language(audio_path, language)
-        detected = detect_language_from_text(text)
+        detected = detect_language_from_text(text) if text else {"language": language, "confidence": 0.5}
         return {
             "text": text,
             "language": detected["language"],
             "confidence": detected["confidence"],
+            "provider": "storm-fallback",
         }
 
-    # Language unknown — single pass with no forced language (let Whisper auto-detect)
-    # This is faster than two-pass (1 inference instead of 2-3) and the model's
-    # auto-detection is good enough for most cases. Keyword detection refines the result.
-    log.info("ASR: language unknown, transcribing with auto-detection")
+    # Language unknown — STORM auto-detect
+    log.info("ASR fallback: language unknown, transcribing with auto-detection")
     text = _transcribe_auto(audio_path)
 
-    # Detect language from the transcribed text using keyword matching
     text_detected = detect_language_from_text(text) if text else {"language": "en-NG", "confidence": 0.5}
     detected_lang = text_detected["language"]
 
-    # If keyword detection suggests a different language with high confidence,
-    # re-transcribe with that language forced (only one extra pass)
     if detected_lang != "en-NG" and text_detected["confidence"] > 0.6:
-        log.info(f"ASR: keyword detected {detected_lang} (conf={text_detected['confidence']:.2f}), re-transcribing with forced language")
+        log.info(f"ASR fallback: keyword detected {detected_lang}, re-transcribing")
         text2 = _transcribe_with_language(audio_path, detected_lang)
         if text2 and len(text2) >= len(text) * 0.3:
             text = text2
@@ -460,6 +619,7 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
         "text": text,
         "language": final_detected["language"],
         "confidence": final_detected["confidence"],
+        "provider": "storm-fallback",
     }
 
 
@@ -550,12 +710,8 @@ def detect_speech_segments(audio_bytes: bytes, sample_rate: int = 16000) -> dict
 # ── Partial transcription for streaming ──
 def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Optional[str] = None) -> dict:
     """
-    Transcribe a partial audio chunk for streaming display.
-    Uses the same STORM-OS-ASR-SMALL pipeline with forced language.
-
-    When language is unknown, uses the two-pass approach (rough English → detect → re-transcribe).
-    For partials, only does two-pass if the rough text has strong non-English markers
-    (to avoid doubling latency on every partial).
+    Partial transcription for streaming display.
+    Tries Groq first (fast, <0.5s), falls back to local STORM if Groq fails.
 
     Returns:
         { text, language, confidence, is_partial: True }
@@ -582,7 +738,13 @@ def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Opt
         if result.returncode != 0:
             return {"text": "", "language": "en-NG", "confidence": 0.5, "is_partial": True}
 
-        # Determine which language to force
+        # ── Try Groq first for fast partial transcription ──
+        groq_result = _groq_transcribe(wav_file.name, language)
+        if groq_result and groq_result["text"]:
+            groq_result["is_partial"] = True
+            return groq_result
+
+        # ── Groq failed — fall back to local STORM ──
         use_lang = language if (language and language in LANG_TO_WHISPER_CODE) else "en-NG"
         do_two_pass = language is None or language not in LANG_TO_WHISPER_CODE
 
@@ -590,7 +752,6 @@ def transcribe_partial(audio_bytes: bytes, encoding: str = "webm", language: Opt
 
         if do_two_pass and text:
             detected = detect_language_from_text(text)
-            # Only re-transcribe if strong non-English signal (confidence > 0.7)
             if detected["language"] != "en-NG" and detected["confidence"] > 0.7:
                 log.info(f"Partial two-pass: detected {detected['language']}, re-transcribing")
                 text = _transcribe_with_language(wav_file.name, detected["language"])
@@ -714,11 +875,12 @@ async def health():
     return {
         "status": "ok",
         "provider": {
-            "name": "storm-os-asr-small",
-            "model": STORM_MODEL_ID,
+            "name": "groq-whisper-large-v3" if GROQ_API_KEY else "storm-os-asr-small",
+            "model": GROQ_WHISPER_MODEL if GROQ_API_KEY else STORM_MODEL_ID,
             "supportedLanguages": SUPPORTED_LANGUAGES,
-            "device": DEVICE,
+            "device": "groq-lpu" if GROQ_API_KEY else DEVICE,
             "pipelineLoaded": _asr_pipeline is not None,
+            "groqAvailable": bool(GROQ_API_KEY),
         },
     }
 
@@ -824,7 +986,13 @@ async def transcribe_partial_endpoint(req: PartialTranscribeRequest):
 @app.on_event("startup")
 async def startup():
     log.info(f"ASR Engine starting on port {PORT} (device={DEVICE})")
-    log.info(f"Model: {STORM_MODEL_ID}")
+    if GROQ_API_KEY:
+        log.info(f"Primary ASR: Groq {GROQ_WHISPER_MODEL} (LPU, 300x real-time)")
+        log.info(f"Specialized: NCAIR1 for pure yo/ig/ha")
+        log.info(f"Fallback: {STORM_MODEL_ID}")
+    else:
+        log.info(f"Primary ASR: {STORM_MODEL_ID} (no GROQ_API_KEY set)")
+        log.info("Set GROQ_API_KEY for whisper-large-v3 (better accuracy + speed)")
     log.info(f"Supported languages: {SUPPORTED_LANGUAGES}")
     log.info(f"Language codes: {LANG_TO_WHISPER_CODE}")
 
