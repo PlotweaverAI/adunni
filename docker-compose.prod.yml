@@ -18,11 +18,13 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       CORS_ORIGINS: ${CORS_ORIGINS}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      NODE_OPTIONS: --dns-result-order=ipv4first
 
   orchestrator:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_API_KEYS: ${GEMINI_API_KEYS}
+      NODE_OPTIONS: --dns-result-order=ipv4first
 
   admin-dashboard:
     environment:
