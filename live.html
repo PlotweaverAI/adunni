@@ -389,14 +389,25 @@ function speakText(text,lang){
 }
 
 // ── Open mic VAD ──
-var VAD_THRESH=0.015, VAD_SPEECH_MIN=3, VAD_SILENCE_STOP=25, VAD_MS=50;
+var VAD_THRESH=0.012, VAD_SPEECH_MIN=3, VAD_SILENCE_STOP=35, VAD_MS=50;
 // Track audio levels for debugging
 var vadDebugLog=false;
+// Pre-roll buffer: keep last 300ms of audio before speech was confirmed
+// This ensures we don't cut off the first word
+var preRollChunks=[]; var PRE_ROLL_FRAMES=6; // 6 × 50ms = 300ms pre-roll
 
 async function startOpenMic(){
   if(!openMicEnabled||!connected||vadStream)return;
   try{
-    vadStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,sampleRate:16000,echoCancellation:true,noiseSuppression:true}});
+    vadStream=await navigator.mediaDevices.getUserMedia({
+      audio:{
+        channelCount:1,
+        sampleRate:48000,  // Let browser use native rate, ffmpeg will downsample
+        echoCancellation:true,
+        noiseSuppression:true,
+        autoGainControl:true  // Normalize volume for better Whisper accuracy
+      }
+    });
     var AC=window.AudioContext||window.webkitAudioContext;
     audioCtx=new AC();
     var src=audioCtx.createMediaStreamSource(vadStream);
@@ -458,29 +469,52 @@ function vadCheck(){
   if(vadDebugLog&&Math.random()<0.05)console.log('[vad] rms='+rms.toFixed(4)+' thresh='+VAD_THRESH+' speaking='+vadIsSpeaking+' frames='+vadSpeechFrames);
   if(rms>VAD_THRESH){
     vadSpeechFrames++;vadSilenceFrames=0;
-    if(vadSpeechFrames>=VAD_SPEECH_MIN&&!vadIsSpeaking){vadIsSpeaking=true;console.log('[open-mic] speech detected, rms='+rms.toFixed(4));startVadRec();}
-  }else if(vadIsSpeaking){
-    vadSilenceFrames++;
-    if(vadSilenceFrames>=VAD_SILENCE_STOP){console.log('[open-mic] end of speech, silence frames='+vadSilenceFrames);vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;stopVadRec();}
+    if(vadSpeechFrames>=VAD_SPEECH_MIN&&!vadIsSpeaking){
+      vadIsSpeaking=true;console.log('[open-mic] speech detected, rms='+rms.toFixed(4));
+      startVadRec();
+    }
+    // Maintain pre-roll buffer (even when not speaking, keep recent audio)
+    if(!vadIsSpeaking){
+      preRollChunks.push(rms);
+      if(preRollChunks.length>PRE_ROLL_FRAMES)preRollChunks.shift();
+    }
+  }else{
+    if(!vadIsSpeaking){
+      // Keep updating pre-roll during silence
+      preRollChunks.push(rms);
+      if(preRollChunks.length>PRE_ROLL_FRAMES)preRollChunks.shift();
+    }
+    if(vadIsSpeaking){
+      vadSilenceFrames++;
+      if(vadSilenceFrames>=VAD_SILENCE_STOP){
+        console.log('[open-mic] end of speech, silence frames='+vadSilenceFrames+' (='+((vadSilenceFrames*VAD_MS)/1000).toFixed(1)+'s)');
+        vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;
+        stopVadRec();
+      }
+    }
   }
 }
 
 async function startVadRec(){
   if(isRecording)return;
   try{
+    // Use higher audio bitrate for better transcription quality
+    // Opus at 128kbps gives near-transparent quality for speech
     var mt='audio/webm;codecs=opus';
     if(!MediaRecorder.isTypeSupported(mt)){mt='audio/webm';if(!MediaRecorder.isTypeSupported(mt)){mt='';}}
     audioChunks=[];
-    mediaRecorder=mt?new MediaRecorder(vadStream,{mimeType:mt}):new MediaRecorder(vadStream);
+    var recOpts=mt?{mimeType:mt,audioBitsPerSecond:128000}:{audioBitsPerSecond:128000};
+    mediaRecorder=new MediaRecorder(vadStream,recOpts);
     // Stream chunks to server as they arrive (for streaming ASR)
     var chunkCount=0;
     mediaRecorder.ondataavailable=function(e){
       if(e.data&&e.data.size>0){
         audioChunks.push(e.data);
-        // Send partial audio every ~500ms (every 5th chunk at 100ms intervals)
+        // Send partial audio every ~1s (every 10 chunks at 100ms intervals)
+        // Less frequent partials = less CPU load on ASR engine
         chunkCount++;
-        if(chunkCount%5===0&&ws&&ws.readyState===WebSocket.OPEN){
-          var partialBlob=new Blob(audioChunks.slice(-5),{type:mediaRecorder.mimeType||'audio/webm'});
+        if(chunkCount%10===0&&ws&&ws.readyState===WebSocket.OPEN){
+          var partialBlob=new Blob(audioChunks.slice(-10),{type:mediaRecorder.mimeType||'audio/webm'});
           var r=new FileReader();
           r.onload=function(){
             if(ws&&ws.readyState===WebSocket.OPEN){
@@ -494,11 +528,15 @@ async function startVadRec(){
     mediaRecorder.onstop=function(){
       if(audioChunks.length>0){
         var blob=new Blob(audioChunks,{type:mediaRecorder.mimeType||'audio/webm'});
-        if(blob.size<200){audioChunks=[];return;}
+        console.log('[audio] Final blob: '+blob.size+' bytes, '+audioChunks.length+' chunks, type='+blob.type);
+        if(blob.size<500){console.warn('[audio] Blob too small, skipping');audioChunks=[];return;}
         var r=new FileReader();
         r.onload=function(){
           var b64=arrayBufferToBase64(r.result);
-          if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:'audio',audioBase64:b64,encoding:'webm',isFinal:true}));}
+          if(ws&&ws.readyState===WebSocket.OPEN){
+            ws.send(JSON.stringify({type:'audio',audioBase64:b64,encoding:'webm',isFinal:true}));
+            console.log('[audio] Sent final audio to server ('+Math.round(b64.length*0.75/1024)+'KB)');
+          }
           transcribing=true;updateUI();
         };
         r.readAsArrayBuffer(blob);

@@ -351,6 +351,8 @@ def _transcribe_with_language(audio_path: str, language: str) -> str:
         generate_kwargs={
             "forced_decoder_ids": forced_decoder_ids,
             "max_new_tokens": 225,
+            "num_beams": 2,  # Beam search for better accuracy (2x slower but more correct)
+            "length_penalty": 1.0,  # Neutral length penalty
         },
     )
     return _clean_transcript(result["text"])
@@ -363,7 +365,10 @@ def _transcribe_auto(audio_path: str) -> str:
     pipeline, _ = _load_asr_pipeline()
     result = pipeline(
         audio_path,
-        generate_kwargs={"max_new_tokens": 225},
+        generate_kwargs={
+            "max_new_tokens": 225,
+            "num_beams": 2,  # Beam search for better accuracy
+        },
     )
     return _clean_transcript(result["text"])
 
