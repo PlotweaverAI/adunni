@@ -655,8 +655,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
   let config: ClientConfig | null = null;
   let sessionActive = true;
   let setupDone = false;
-  let serverVadSpeechFrames = 0;
-  let serverVadSilenceFrames = 0;
+  // Server-side VAD removed — client does VAD, server just buffers and transcribes
   let videoConversation: { conversationId: string; conversationUrl: string } | null = null;
   let partialTranscribeTimer: ReturnType<typeof setTimeout> | null = null;
   let lastPartialText = '';
@@ -678,80 +677,16 @@ wss.on('connection', async (ws: WebSocket, req) => {
         // Real audio chunk from browser microphone
         const audioChunk = msg.audioBase64 ? Buffer.from(msg.audioBase64, 'base64') : Buffer.from(msg.audio, 'base64');
         audioBuffer.push(audioChunk);
+        const encoding = msg.encoding || 'webm';
 
-        // ── VAD: check if chunk contains speech ──
-        // Server-side VAD: detect speech/silence and auto-trigger transcription
-        // when the user pauses, even without client-side isFinal
-        if (!msg.isFinal && audioChunk.length > 200) {
-          try {
-            const vadResp = await fetch(`${ASR_SERVICE_URL}/vad`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                audio_base64: audioChunk.toString('base64'),
-                encoding: 'pcm16',
-                sample_rate: 16000,
-              }),
-              signal: AbortSignal.timeout(5000),
-            });
-            if (vadResp.ok) {
-              const vadResult = await vadResp.json() as { has_speech: boolean; speech_probability: number };
-              // Track speech/silence state for server-side VAD
-              if (vadResult.has_speech) {
-                serverVadSpeechFrames++;
-                serverVadSilenceFrames = 0;
-              } else if (serverVadSpeechFrames > 0) {
-                serverVadSilenceFrames++;
-                // Auto-trigger transcription after ~1.5s of silence following speech
-                if (serverVadSilenceFrames >= 15 && audioBuffer.length > 0) {
-                  console.log('[gateway] Server-side VAD detected end of speech, auto-transcribing');
-                  serverVadSpeechFrames = 0;
-                  serverVadSilenceFrames = 0;
+        // Skip server-side VAD for non-final chunks — it's too slow on CPU
+        // and the client already does VAD. Just buffer and wait for isFinal.
+        // This avoids overwhelming the CPU ASR engine with competing requests.
 
-                  // Auto-finalize: trigger transcription of buffered audio
-                  if (partialTranscribeTimer) { clearTimeout(partialTranscribeTimer); partialTranscribeTimer = null; }
-                  const combined = Buffer.concat(audioBuffer);
-                  audioBuffer = [];
-                  lastPartialText = '';
-
-                  if (combined.length > 200) {
-                    ws.send(JSON.stringify({ type: 'transcribing' }));
-                    try {
-                      const asrEngineResp = await fetch(`${ASR_SERVICE_URL}/transcribe`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          audio_base64: combined.toString('base64'),
-                          encoding: msg.encoding || 'webm',
-                          language: detectedLanguage || msg.language || null,
-                        }),
-                        signal: AbortSignal.timeout(120000),
-                      });
-                      if (asrEngineResp.ok) {
-                        const asrResult = await asrEngineResp.json() as { text: string; language: LanguageCode; confidence: number };
-                        if (asrResult.text && asrResult.text.trim()) {
-                          detectedLanguage = asrResult.language;
-                          await processUserUtteranceWithLanguage(
-                            asrResult.text, asrResult.language, asrResult.confidence,
-                            sessionId, clientId, config, ws, turnIndex, videoConversation,
-                          );
-                          turnIndex += 2;
-                        }
-                      }
-                    } catch (asrErr) {
-                      console.error('[gateway] Server VAD auto-transcribe error:', asrErr instanceof Error ? asrErr.message : asrErr);
-                    }
-                  }
-                }
-              }
-            }
-          } catch {
-            // VAD failed — continue without it (fail open)
-          }
-        }
-
-        // ── Streaming: send partial transcripts as chunks arrive ──
-        if (!msg.isFinal && audioBuffer.length > 0 && audioBuffer.length % 5 === 0) {
+        // ── Streaming: send partial transcripts (debounced) ──
+        // Only do partial transcription every 10 chunks (~1s of audio)
+        // to avoid overloading the CPU ASR engine
+        if (!msg.isFinal && audioBuffer.length > 0 && audioBuffer.length % 10 === 0) {
           if (partialTranscribeTimer) clearTimeout(partialTranscribeTimer);
           partialTranscribeTimer = setTimeout(async () => {
             partialTranscribeTimer = null;
@@ -763,10 +698,10 @@ wss.on('connection', async (ws: WebSocket, req) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   audio_base64: partialAudio.toString('base64'),
-                  encoding: msg.encoding || 'webm',
+                  encoding: encoding,
                   language: detectedLanguage,
                 }),
-                signal: AbortSignal.timeout(10000),
+                signal: AbortSignal.timeout(60000),
               });
               if (partialResp.ok) {
                 const partialResult = await partialResp.json() as { text: string; language: LanguageCode; confidence: number; is_partial: boolean };
@@ -805,6 +740,8 @@ wss.on('connection', async (ws: WebSocket, req) => {
             audioBuffer = [];
             lastPartialText = '';
 
+            console.log(`[gateway] Final audio received: ${combined.length} bytes, encoding=${encoding}, chunks=${audioBuffer.length}`);
+
             if (combined.length < 200) {
               console.warn('[gateway] Audio too small (' + combined.length + ' bytes), skipping ASR');
               ws.send(JSON.stringify({ type: 'error', message: 'Audio too short. Please hold the mic button longer.' }));
@@ -817,7 +754,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     audio_base64: combined.toString('base64'),
-                    encoding: msg.encoding || 'webm',
+                    encoding: encoding,
                     language: detectedLanguage || msg.language || null,
                   }),
                   signal: AbortSignal.timeout(120000),
@@ -825,6 +762,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
 
                 if (asrEngineResp.ok) {
                   const asrResult = await asrEngineResp.json() as { text: string; language: LanguageCode; confidence: number };
+                  console.log(`[gateway] ASR result: text="${asrResult.text?.substring(0, 80)}" lang=${asrResult.language} conf=${asrResult.confidence}`);
                   if (asrResult.text && asrResult.text.trim()) {
                     detectedLanguage = asrResult.language;
                     await processUserUtteranceWithLanguage(

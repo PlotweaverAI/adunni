@@ -390,6 +390,8 @@ function speakText(text,lang){
 
 // ── Open mic VAD ──
 var VAD_THRESH=0.015, VAD_SPEECH_MIN=3, VAD_SILENCE_STOP=25, VAD_MS=50;
+// Track audio levels for debugging
+var vadDebugLog=false;
 
 async function startOpenMic(){
   if(!openMicEnabled||!connected||vadStream)return;
@@ -444,17 +446,22 @@ function vadCheck(){
     }
     return;
   }
-  if(transcribing){if(vadIsSpeaking){vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;}return;}
+  if(transcribing){
+    // While transcribing, still allow barge-in but don't start new recordings
+    if(vadIsSpeaking){vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;}
+    return;
+  }
   var buf=new Float32Array(vadAnalyser.fftSize);
   vadAnalyser.getFloatTimeDomainData(buf);
   var sum=0;for(var i=0;i<buf.length;i++)sum+=buf[i]*buf[i];
   var rms=Math.sqrt(sum/buf.length);
+  if(vadDebugLog&&Math.random()<0.05)console.log('[vad] rms='+rms.toFixed(4)+' thresh='+VAD_THRESH+' speaking='+vadIsSpeaking+' frames='+vadSpeechFrames);
   if(rms>VAD_THRESH){
     vadSpeechFrames++;vadSilenceFrames=0;
-    if(vadSpeechFrames>=VAD_SPEECH_MIN&&!vadIsSpeaking){vadIsSpeaking=true;console.log('[open-mic] speech detected');startVadRec();}
+    if(vadSpeechFrames>=VAD_SPEECH_MIN&&!vadIsSpeaking){vadIsSpeaking=true;console.log('[open-mic] speech detected, rms='+rms.toFixed(4));startVadRec();}
   }else if(vadIsSpeaking){
     vadSilenceFrames++;
-    if(vadSilenceFrames>=VAD_SILENCE_STOP){console.log('[open-mic] end of speech');vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;stopVadRec();}
+    if(vadSilenceFrames>=VAD_SILENCE_STOP){console.log('[open-mic] end of speech, silence frames='+vadSilenceFrames);vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;stopVadRec();}
   }
 }
 
