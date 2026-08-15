@@ -22,6 +22,7 @@ services:
   orchestrator:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_KEYS: ${GEMINI_API_KEYS}
 
   admin-dashboard:
     environment:
