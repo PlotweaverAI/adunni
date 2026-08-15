@@ -1002,8 +1002,26 @@ async function processUserUtteranceWithLanguage(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(orchRequest),
   });
+
+  if (!orchResp.ok) {
+    const orchErrBody = await orchResp.text();
+    console.error('[gateway] Orchestrator error:', orchResp.status, orchErrBody.substring(0, 300));
+    ws.send(JSON.stringify({ type: 'error', message: 'AI processing failed' }));
+    ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: currentTurnIndex + 1 }));
+    return;
+  }
+
   const orchResult = await orchResp.json() as OrchestratorResponse;
   const decision = orchResult.decision;
+
+  if (!decision) {
+    console.error('[gateway] Orchestrator returned no decision:', JSON.stringify(orchResult).substring(0, 300));
+    ws.send(JSON.stringify({ type: 'error', message: 'AI returned no decision' }));
+    ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: currentTurnIndex + 1 }));
+    return;
+  }
+
+  console.log(`[gateway] Orchestrator decision: type=${decision.type}`);
 
   let aiText = '';
   let actionId: string | undefined;

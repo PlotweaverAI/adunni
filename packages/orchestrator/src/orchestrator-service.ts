@@ -217,14 +217,36 @@ Escalation rules:
     const langName = LANGUAGE_NAMES[detectedLanguage] ?? detectedLanguage;
     const userMessageWithContext = `[Detected language: ${langName}]\n${userUtterance}`;
 
-    const llmResponse = await this.llm.complete({
-      systemPrompt,
-      conversationHistory,
-      userMessage: userMessageWithContext,
-      tools,
-      maxTokens: 300,
-      temperature: 0.7,
-    });
+    let llmResponse;
+    try {
+      llmResponse = await this.llm.complete({
+        systemPrompt,
+        conversationHistory,
+        userMessage: userMessageWithContext,
+        tools,
+        maxTokens: 300,
+        temperature: 0.7,
+      });
+    } catch (llmErr) {
+      console.error('[orchestrator] LLM failed, using fallback:', llmErr instanceof Error ? llmErr.message : llmErr);
+      // Fallback: return a simple response so the user isn't left hanging
+      const fallbackText = detectedLanguage === 'yo' ? 'Pardon me, mo n ba e se. Nje o le so leyi lẹẹkansi?'
+        : detectedLanguage === 'ha' ? 'Gafara, zan iya sake faɗin wannan?'
+        : detectedLanguage === 'ig' ? 'Biko, m ga-ekwu ya ọzọ?'
+        : detectedLanguage === 'pcm' ? 'Sorry, abeg you fit repeat that one again?'
+        : "I'm sorry, I didn't catch that. Could you please repeat?";
+      const fallbackDecision: OrchestratorDecision = {
+        type: 'respond',
+        text: fallbackText,
+        language: detectedLanguage,
+      };
+      return {
+        decision: fallbackDecision,
+        confidence: 0.5,
+        updatedContext: this.updateContext(context, fallbackDecision, detectedLanguage),
+        latencyMs: Date.now() - startTime,
+      };
+    }
 
     let decision: OrchestratorDecision;
     let intentName: string | undefined;
