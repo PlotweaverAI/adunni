@@ -5,13 +5,14 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
 
-# ASR model — STORM-OS-ASR-SMALL (whisper-small LoRA-fine-tuned)
+# ASR — faster-whisper (CTranslate2 backend, 4x faster than transformers on CPU)
+faster-whisper==1.0.3
+ctranslate2==4.5.0
+
+# Model conversion (transformers needed for converting HF models to CT2 format)
 transformers==4.46.3
 torch==2.5.1
 torchaudio==2.5.1
-
-# CPU acceleration (BetterTransformer for 2-3x faster Whisper inference on CPU)
-optimum[onnxruntime]==1.23.3
 
 # Audio handling (librosa for resampling per the technical guide)
 soundfile==0.12.1

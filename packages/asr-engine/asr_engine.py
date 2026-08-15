@@ -1,9 +1,10 @@
 """
 asr_engine.py — Python ASR microservice for Àdùnní
 
-Uses NCAIR1 per-language models and STORM-OS-ASR-SMALL:
-  - NCAIR1 (yo/ig/ha) — domain-tuned for pure Yoruba/Igbo/Hausa
-  - STORM-OS-ASR-SMALL (en-NG/pcm) — single model for Nigerian English & Pidgin
+Uses faster-whisper (CTranslate2 backend) with STORM-OS-ASR-SMALL:
+  - STORM-OS-ASR-SMALL is a LoRA-fine-tuned whisper-small for Nigerian languages
+  - faster-whisper provides 4x faster CPU inference via int8 quantization
+  - Model is converted to CTranslate2 format on first run (cached in /models)
 
 Endpoints:
   GET  /health            — service health + provider info
@@ -14,7 +15,6 @@ Endpoints:
   POST /vad               — { audio_base64 } -> { has_speech, speech_ratio, segments }
   POST /translate         — { text, source_language, target_language } -> translated text
 
-Set HF_TOKEN for NCAIR1 gated models.
 Set HF_TOKEN_STORM for wolethereader org models (STORM-OS-ASR-SMALL).
 """
 
@@ -36,10 +36,10 @@ log = logging.getLogger("asr-engine")
 
 # ── Config ──
 PORT = int(os.getenv("PORT", "3010"))
-# Primary HF token (for NCAIR1 gated models)
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-# Secondary token for wolethereader org models (STORM-OS-ASR-SMALL)
 HF_TOKEN_STORM = os.getenv("HF_TOKEN_STORM", HF_TOKEN)
+# Directory for cached CTranslate2 models
+MODEL_CACHE_DIR = os.getenv("MODEL_CACHE_DIR", "/models")
 
 
 def _torch_cuda_available() -> bool:
@@ -51,21 +51,31 @@ def _torch_cuda_available() -> bool:
 
 
 DEVICE = "cuda" if _torch_cuda_available() else "cpu"
+# int8 for CPU (4x faster), float16 for GPU
+COMPUTE_TYPE = "float16" if DEVICE == "cuda" else "int8"
 
 
 # ── Model registry ──
 # Per-language ASR models from NCAIR1 (dedicated, fine-tuned for each language)
-# Fallback: STORM-OS-ASR-SMALL (single model for all languages)
+# These are MORE accurate than STORM for pure Yoruba/Igbo/Hausa.
 NCAIR_MODELS = {
     "yo": "NCAIR1/Yoruba-ASR",
     "ig": "NCAIR1/Igbo-ASR",
     "ha": "NCAIR1/Hausa-ASR",
 }
 
-# STORM-OS-ASR-SMALL: single model for all languages (fallback)
+# STORM-OS-ASR-SMALL: single model for all languages (fallback + en-NG/pcm)
 STORM_MODEL_ID = "wolethereader/STORM-OS-ASR-SMALL"
 
-# Adunni LanguageCode -> Whisper language token code
+# CTranslate2 converted model cache paths
+STORM_CT2_PATH = os.path.join(MODEL_CACHE_DIR, "storm-ct2")
+NCAIR_CT2_PATHS = {
+    "yo": os.path.join(MODEL_CACHE_DIR, "ncair-yo-ct2"),
+    "ig": os.path.join(MODEL_CACHE_DIR, "ncair-ig-ct2"),
+    "ha": os.path.join(MODEL_CACHE_DIR, "ncair-ha-ct2"),
+}
+
+# Adunni LanguageCode -> Whisper language code
 LANG_TO_WHISPER_CODE = {
     "en-NG": "en",
     "yo":    "yo",
@@ -76,163 +86,90 @@ LANG_TO_WHISPER_CODE = {
 
 SUPPORTED_LANGUAGES = list(LANG_TO_WHISPER_CODE.keys())
 
-# ── Lazy-loaded model cache ──
-# Per-language pipelines (NCAIR1 models)
-_ncair_pipelines: dict[str, tuple] = {}  # lang -> (pipeline, processor)
-# STORM fallback pipeline
-_asr_pipeline = None
-_processor = None
-_forced_decoder_ids_cache: dict[str, list] = {}
+# ── Lazy-loaded faster-whisper models ──
+_asr_model = None       # STORM model (faster_whisper.WhisperModel)
+_ncair_models = {}      # lang -> faster_whisper.WhisperModel
 
 
-def _build_forced_decoder_ids(processor, lang_code: str):
-    """Build forced_decoder_ids to force a specific language (per STORM-OS-ASR-SMALL guide)."""
-    if lang_code in _forced_decoder_ids_cache:
-        return _forced_decoder_ids_cache[lang_code]
-
-    vocab = processor.tokenizer.get_vocab()
-    whisper_lang = LANG_TO_WHISPER_CODE.get(lang_code, "en")
-    token_id = vocab.get(f"<|{whisper_lang}|>")
-    if token_id is None:
-        # Fallback to English if the language token isn't found
-        token_id = vocab.get("<|en|>")
-
-    forced_ids = [
-        [1, token_id],
-        [2, vocab["<|transcribe|>"]],
-        [3, vocab["<|notimestamps|>"]],
-    ]
-    _forced_decoder_ids_cache[lang_code] = forced_ids
-    return forced_ids
-
-
-def _load_asr_pipeline():
-    """Load the STORM-OS-ASR-SMALL pipeline (cached singleton, used as fallback).
-
-    STORM-OS-ASR-SMALL is a LoRA-merged checkpoint of openai/whisper-small.
-    It ships model weights + tokenizer but NOT a preprocessor_config.json,
-    so we load the processor (feature extractor + tokenizer) from the base
-    model openai/whisper-small, and the model weights from STORM-OS-ASR-SMALL.
+def _convert_model_to_ct2(model_id: str, ct2_path: str, token: str = None):
+    """Convert a HuggingFace Whisper model to CTranslate2 format.
+    
+    This runs once on first use. The converted model is cached and reused.
     """
-    global _asr_pipeline, _processor
-    if _asr_pipeline is not None:
-        return _asr_pipeline, _processor
+    if os.path.exists(os.path.join(ct2_path, "model.bin")):
+        log.info(f"CT2 model already exists at {ct2_path}, skipping conversion")
+        return
 
-    import torch
-    from transformers import (
-        pipeline as hf_pipeline,
-        WhisperProcessor,
-        WhisperForConditionalGeneration,
-        WhisperFeatureExtractor,
+    log.info(f"Converting {model_id} to CTranslate2 format ({COMPUTE_TYPE})...")
+    import ctranslate2
+    
+    os.makedirs(ct2_path, exist_ok=True)
+    
+    converter = ctranslate2.converters.TransformersConverter(
+        model_id,
+        token=token,
     )
-
-    log.info(f"Loading STORM-OS-ASR-SMALL pipeline: {STORM_MODEL_ID} (device={DEVICE})")
-
-    # Feature extractor from base model (STORM model has no preprocessor_config.json)
-    base_model_id = "openai/whisper-small"
-    feature_extractor = WhisperFeatureExtractor.from_pretrained(base_model_id)
-
-    # Tokenizer from STORM model (has extended <|ig|> and <|pcm|> tokens)
-    from transformers import WhisperTokenizerFast
-    tokenizer = WhisperTokenizerFast.from_pretrained(STORM_MODEL_ID, token=HF_TOKEN_STORM or None)
-
-    # Build a simple processor-like object for forced_decoder_ids construction
-    class _SimpleProcessor:
-        def __init__(self, tok, fe):
-            self.tokenizer = tok
-            self.feature_extractor = fe
-    _processor = _SimpleProcessor(tokenizer, feature_extractor)
-
-    # Model weights from STORM-OS-ASR-SMALL (merged LoRA checkpoint)
-    # Use float16 on GPU, float32 on CPU (float16 is slow on CPU)
-    # On CPU, use BetterTransformer for faster inference if available
-    dtype = torch.float16 if DEVICE == "cuda" else torch.float32
-    model = WhisperForConditionalGeneration.from_pretrained(
-        STORM_MODEL_ID,
-        torch_dtype=dtype,
-        token=HF_TOKEN_STORM or None,
+    converter.convert(
+        ct2_path,
+        quantization=COMPUTE_TYPE,
+        force=True,
     )
-    model.eval()
+    log.info(f"Model converted and saved to {ct2_path}")
 
-    # Enable BetterTransformer for CPU acceleration (2-3x faster on CPU)
-    if DEVICE == "cpu":
-        try:
-            from optimum.bettertransformer import BetterTransformer
-            model = BetterTransformer.transform(model)
-            log.info("Enabled BetterTransformer for CPU acceleration")
-        except ImportError:
-            log.info("optimum not installed, using standard transformer (install optimum for 2-3x CPU speedup)")
 
-    _asr_pipeline = hf_pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=tokenizer,
-        feature_extractor=feature_extractor,
-        chunk_length_s=30,
-        stride_length_s=5,
-        device=0 if DEVICE == "cuda" else -1,
-        torch_dtype=torch.float32,
+def _load_asr_model():
+    """Load the STORM faster-whisper model (cached singleton)."""
+    global _asr_model
+    if _asr_model is not None:
+        return _asr_model
+
+    from faster_whisper import WhisperModel
+
+    _convert_model_to_ct2(STORM_MODEL_ID, STORM_CT2_PATH, HF_TOKEN_STORM or None)
+
+    log.info(f"Loading faster-whisper STORM model from {STORM_CT2_PATH} (device={DEVICE}, compute_type={COMPUTE_TYPE})")
+    _asr_model = WhisperModel(
+        STORM_CT2_PATH,
+        device=DEVICE,
+        compute_type=COMPUTE_TYPE,
+        num_workers=2,
     )
+    log.info("faster-whisper STORM model loaded")
+    return _asr_model
 
-    log.info(f"STORM-OS-ASR-SMALL pipeline loaded")
-    return _asr_pipeline, _processor
 
-
-def _load_ncair_pipeline(lang: str):
-    """Load a per-language NCAIR1 ASR model (cached per language).
-
-    NCAIR1 models are fine-tuned whisper-small for each Nigerian language.
-    They include preprocessor_config.json (unlike STORM), so we can load
-    the processor directly from the model repo.
+def _load_ncair_model(lang: str):
+    """Load a per-language NCAIR1 model as faster-whisper (cached per language).
+    
+    NCAIR1 models are MORE accurate than STORM for pure Yoruba/Igbo/Hausa
+    because they're fine-tuned on dedicated per-language datasets.
     """
-    if lang in _ncair_pipelines:
-        return _ncair_pipelines[lang]
+    if lang in _ncair_models:
+        return _ncair_models[lang]
 
     model_id = NCAIR_MODELS.get(lang)
     if not model_id:
         return None
 
-    import torch
-    from transformers import (
-        pipeline as hf_pipeline,
-        WhisperProcessor,
-        WhisperForConditionalGeneration,
-    )
-
-    log.info(f"Loading NCAIR1 ASR model: {model_id} for lang={lang} (device={DEVICE})")
+    ct2_path = NCAIR_CT2_PATHS.get(lang)
+    if not ct2_path:
+        return None
 
     try:
-        processor = WhisperProcessor.from_pretrained(model_id, token=HF_TOKEN or None)
-        dtype = torch.float16 if DEVICE == "cuda" else torch.float32
-        model = WhisperForConditionalGeneration.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            token=HF_TOKEN or None,
+        from faster_whisper import WhisperModel
+
+        _convert_model_to_ct2(model_id, ct2_path, HF_TOKEN or None)
+
+        log.info(f"Loading faster-whisper NCAIR1 model for {lang} from {ct2_path}")
+        model = WhisperModel(
+            ct2_path,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+            num_workers=2,
         )
-        model.eval()
-
-        # Enable BetterTransformer for CPU acceleration
-        if DEVICE == "cpu":
-            try:
-                from optimum.bettertransformer import BetterTransformer
-                model = BetterTransformer.transform(model)
-            except ImportError:
-                pass
-
-        pipe = hf_pipeline(
-            "automatic-speech-recognition",
-            model=model,
-            tokenizer=processor.tokenizer,
-            feature_extractor=processor.feature_extractor,
-            chunk_length_s=30,
-            stride_length_s=5,
-            device=0 if DEVICE == "cuda" else -1,
-            torch_dtype=dtype,
-        )
-
-        _ncair_pipelines[lang] = (pipe, processor)
-        log.info(f"NCAIR1 ASR model loaded: {model_id}")
-        return _ncair_pipelines[lang]
+        _ncair_models[lang] = model
+        log.info(f"NCAIR1 faster-whisper model loaded for {lang}")
+        return model
     except Exception as e:
         log.warning(f"Failed to load NCAIR1 model {model_id}: {e}, will use STORM fallback")
         return None
@@ -324,91 +261,93 @@ def _clean_transcript(text: str) -> str:
     return text.strip()
 
 
-# ── Transcribe audio file ──
 def _transcribe_with_language(audio_path: str, language: str) -> str:
-    """Internal: transcribe with a specific forced language. Returns text only.
-
-    Uses NCAIR1 per-language model if available (more accurate), falls back to STORM.
+    """Transcribe with a specific forced language using faster-whisper.
+    
+    Uses NCAIR1 per-language model for yo/ig/ha (more accurate),
+    falls back to STORM for en-NG/pcm or if NCAIR1 fails.
     """
-    # Try NCAIR1 per-language model first
-    ncair = _load_ncair_pipeline(language)
-    if ncair is not None:
-        pipe, _ = ncair
-        # NCAIR1 models are fine-tuned for the language — no forced_decoder_ids needed
-        result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225})
-        return _clean_transcript(result["text"])
-
-    # Fall back to STORM-OS-ASR-SMALL with forced language
-    pipeline, processor = _load_asr_pipeline()
-    forced_decoder_ids = _build_forced_decoder_ids(processor, language)
-    result = pipeline(
+    whisper_lang = LANG_TO_WHISPER_CODE.get(language, "en")
+    
+    # Try NCAIR1 per-language model first for pure Nigerian languages
+    if language in ("yo", "ig", "ha"):
+        ncair_model = _load_ncair_model(language)
+        if ncair_model is not None:
+            try:
+                segments, _info = ncair_model.transcribe(
+                    audio_path,
+                    language=whisper_lang,
+                    beam_size=2,
+                    max_new_tokens=225,
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500),
+                )
+                text = " ".join([seg.text for seg in segments])
+                text = _clean_transcript(text)
+                if text:
+                    return text
+            except Exception as e:
+                log.warning(f"NCAIR1 failed for {language}: {e}, falling back to STORM")
+    
+    # Fall back to STORM model
+    model = _load_asr_model()
+    segments, _info = model.transcribe(
         audio_path,
-        generate_kwargs={
-            "forced_decoder_ids": forced_decoder_ids,
-            "max_new_tokens": 225,
-            "num_beams": 2,  # Beam search for better accuracy (2x slower but more correct)
-            "length_penalty": 1.0,  # Neutral length penalty
-        },
+        language=whisper_lang,
+        beam_size=2,
+        max_new_tokens=225,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
     )
-    return _clean_transcript(result["text"])
+    text = " ".join([seg.text for seg in segments])
+    return _clean_transcript(text)
 
 
 def _transcribe_auto(audio_path: str) -> str:
-    """Transcribe without forcing a language — let Whisper auto-detect.
-    Faster than two-pass since it's a single inference.
-    """
-    pipeline, _ = _load_asr_pipeline()
-    result = pipeline(
+    """Transcribe without forcing a language — let Whisper auto-detect."""
+    model = _load_asr_model()
+    segments, _info = model.transcribe(
         audio_path,
-        generate_kwargs={
-            "max_new_tokens": 225,
-            "num_beams": 2,  # Beam search for better accuracy
-        },
+        beam_size=2,
+        max_new_tokens=225,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
     )
-    return _clean_transcript(result["text"])
+    text = " ".join([seg.text for seg in segments])
+    return _clean_transcript(text)
 
 
 def _detect_language_acoustic(audio_path: str) -> str:
-    """Use Whisper's built-in language detection to identify the spoken language.
-
-    This is unreliable for ig/pcm per the model card, but better than forcing English.
+    """Use faster-whisper's built-in language detection to identify the spoken language.
+    
     Returns a LanguageCode (en-NG, yo, ha, ig, pcm).
     """
-    pipeline, processor = _load_asr_pipeline()
-    import torch
-    # Load audio
+    model = _load_asr_model()
     import librosa
     audio, sr = librosa.load(audio_path, sr=16000)
-    inputs = processor.feature_extractor(audio, sampling_rate=16000, return_tensors="pt")
-    input_features = inputs.input_features.to(torch.float32)
-
-    # Use the model's detect_language method
-    model = pipeline.model
-    with torch.no_grad():
-        detected_ids, _ = model.detect_language(input_features)
-
-    # detected_ids is a tensor of token IDs — decode to get the language token
-    token = processor.tokenizer.decode(detected_ids[0])
-    # token looks like "<|yo|>" — extract the language code
-    import re as _re
-    match = _re.search(r"<\|(\w+)\|>", token)
-    if match:
-        lang_code = match.group(1)
-        # Map back to our LanguageCode
-        for adunni_code, whisper_code in LANG_TO_WHISPER_CODE.items():
-            if whisper_code == lang_code:
-                return adunni_code
+    
+    # faster-whisper's detect_language takes a numpy array
+    segments, info = model.transcribe(
+        audio_path,
+        beam_size=1,
+        language_detection=True,
+    )
+    detected_lang = info.language
+    
+    # Map back to our LanguageCode
+    for adunni_code, whisper_code in LANG_TO_WHISPER_CODE.items():
+        if whisper_code == detected_lang:
+            return adunni_code
     return "en-NG"
 
 
 def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     """
-    Transcribe audio using NCAIR1/STORM models (Nigerian-language-tuned).
+    Transcribe audio using faster-whisper with STORM-OS-ASR-SMALL.
 
     Flow:
-      - If language is known and is yo/ig/ha: try NCAIR1 first, then STORM
-      - If language is known (en-NG/pcm): STORM with forced language
-      - If language is unknown: STORM auto-detect, then keyword-based re-transcribe
+      - If language is known: transcribe with forced language
+      - If language is unknown: auto-detect, then keyword-based re-transcribe if needed
 
     Args:
         audio_path: Path to audio file (wav, 16kHz mono preferred)
@@ -418,37 +357,20 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
         { text, language, confidence, provider }
     """
     if language is not None and language in LANG_TO_WHISPER_CODE:
-        # Language known — try NCAIR1 for yo/ig/ha, STORM for en-NG/pcm
-        if language in ("yo", "ig", "ha"):
-            ncair = _load_ncair_pipeline(language)
-            if ncair is not None:
-                try:
-                    pipe, _ = ncair
-                    result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
-                    text = _clean_transcript(result["text"])
-                    if text:
-                        detected = detect_language_from_text(text)
-                        log.info(f"NCAIR1 transcribed ({language}): \"{text[:80]}\"")
-                        return {
-                            "text": text,
-                            "language": detected["language"],
-                            "confidence": detected["confidence"],
-                            "provider": "ncair1",
-                        }
-                except Exception as e:
-                    log.warning(f"NCAIR1 failed for {language}: {e}")
-
-        # STORM with forced language
+        # Language known — transcribe with forced language
+        # _transcribe_with_language tries NCAIR1 first for yo/ig/ha, then STORM
         text = _transcribe_with_language(audio_path, language)
         detected = detect_language_from_text(text) if text else {"language": language, "confidence": 0.5}
+        # Determine provider: NCAIR1 if it was used for yo/ig/ha, else STORM
+        provider = "ncair1-ct2" if language in ("yo", "ig", "ha") and language in _ncair_models else "storm-ct2"
         return {
             "text": text,
             "language": detected["language"],
             "confidence": detected["confidence"],
-            "provider": "storm",
+            "provider": provider,
         }
 
-    # Language unknown — STORM auto-detect
+    # Language unknown — auto-detect
     log.info("ASR: language unknown, transcribing with auto-detection")
     text = _transcribe_auto(audio_path)
 
@@ -456,42 +378,21 @@ def transcribe_audio(audio_path: str, language: Optional[str] = None) -> dict:
     detected_lang = text_detected["language"]
 
     # If keyword detection suggests a Nigerian language with high confidence,
-    # re-transcribe with that language forced (and try NCAIR1 for yo/ig/ha)
+    # re-transcribe with that language forced (NCAIR1 for yo/ig/ha, STORM for others)
     if detected_lang != "en-NG" and text_detected["confidence"] > 0.6:
         log.info(f"ASR: keyword detected {detected_lang} (conf={text_detected['confidence']:.2f}), re-transcribing")
-
-        # Try NCAIR1 for pure Nigerian languages
-        if detected_lang in ("yo", "ig", "ha"):
-            ncair = _load_ncair_pipeline(detected_lang)
-            if ncair is not None:
-                try:
-                    pipe, _ = ncair
-                    result = pipe(audio_path, generate_kwargs={"max_new_tokens": 225, "num_beams": 2})
-                    text2 = _clean_transcript(result["text"])
-                    if text2 and len(text2) >= len(text) * 0.3:
-                        log.info(f"NCAIR1 re-transcribe for {detected_lang}: \"{text2[:80]}\"")
-                        detected = detect_language_from_text(text2)
-                        return {
-                            "text": text2,
-                            "language": detected["language"],
-                            "confidence": detected["confidence"],
-                            "provider": "ncair1",
-                        }
-                except Exception as e:
-                    log.warning(f"NCAIR1 re-transcribe failed for {detected_lang}: {e}")
-
-        # STORM re-transcribe with detected language
         text2 = _transcribe_with_language(audio_path, detected_lang)
         if text2 and len(text2) >= len(text) * 0.3:
             text = text2
 
     final_detected = detect_language_from_text(text) if text else {"language": detected_lang, "confidence": 0.5}
+    provider = "ncair1-ct2" if detected_lang in ("yo", "ig", "ha") and detected_lang in _ncair_models else "storm-ct2"
 
     return {
         "text": text,
         "language": final_detected["language"],
         "confidence": final_detected["confidence"],
-        "provider": "storm",
+        "provider": provider,
     }
 
 
@@ -745,7 +646,9 @@ async def health():
             "model": STORM_MODEL_ID,
             "supportedLanguages": SUPPORTED_LANGUAGES,
             "device": DEVICE,
-            "pipelineLoaded": _asr_pipeline is not None,
+            "pipelineLoaded": _asr_model is not None,
+            "ncairModelsLoaded": list(_ncair_models.keys()),
+            "computeType": COMPUTE_TYPE,
         },
     }
 
@@ -850,8 +753,8 @@ async def transcribe_partial_endpoint(req: PartialTranscribeRequest):
 
 @app.on_event("startup")
 async def startup():
-    log.info(f"ASR Engine starting on port {PORT} (device={DEVICE})")
-    log.info(f"Primary ASR: NCAIR1 (yo/ig/ha) + {STORM_MODEL_ID} (en-NG/pcm)")
+    log.info(f"ASR Engine starting on port {PORT} (device={DEVICE}, compute_type={COMPUTE_TYPE})")
+    log.info(f"Primary ASR: NCAIR1 (yo/ig/ha) + {STORM_MODEL_ID} (en-NG/pcm) — via faster-whisper (CTranslate2)")
     log.info(f"Supported languages: {SUPPORTED_LANGUAGES}")
     log.info(f"Language codes: {LANG_TO_WHISPER_CODE}")
 
