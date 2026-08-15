@@ -1,15 +1,9 @@
 """
 asr_engine.py — Python ASR microservice for Àdùnní
 
-Hybrid ASR pipeline with three tiers:
-  1. Groq Whisper Large v3 (primary) — fast, accurate, built-in language detection
-  2. NCAIR1 per-language models (specialized) — domain-tuned for pure Yoruba/Igbo/Hausa
-  3. STORM-OS-ASR-SMALL (fallback) — single model for all 5 Nigerian languages
-
-Flow:
-  - Audio → Groq large-v3 (detects language + transcribes in <0.5s)
-  - If Groq detects pure yo/ig/ha → NCAIR1 re-transcribe (more accurate for those)
-  - If Groq fails → fall back to local STORM/NCAIR1
+Uses NCAIR1 per-language models and STORM-OS-ASR-SMALL:
+  - NCAIR1 (yo/ig/ha) — domain-tuned for pure Yoruba/Igbo/Hausa
+  - STORM-OS-ASR-SMALL (en-NG/pcm) — single model for Nigerian English & Pidgin
 
 Endpoints:
   GET  /health            — service health + provider info
@@ -20,7 +14,6 @@ Endpoints:
   POST /vad               — { audio_base64 } -> { has_speech, speech_ratio, segments }
   POST /translate         — { text, source_language, target_language } -> translated text
 
-Set GROQ_API_KEY for Groq Whisper Large v3 (primary ASR).
 Set HF_TOKEN for NCAIR1 gated models.
 Set HF_TOKEN_STORM for wolethereader org models (STORM-OS-ASR-SMALL).
 """
@@ -30,7 +23,6 @@ import re
 import base64
 import tempfile
 import logging
-import json as _json
 import numpy as np
 from typing import Optional
 
@@ -44,10 +36,6 @@ log = logging.getLogger("asr-engine")
 
 # ── Config ──
 PORT = int(os.getenv("PORT", "3010"))
-# Groq API key for Whisper Large v3 (primary ASR)
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
-GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 # Primary HF token (for NCAIR1 gated models)
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 # Secondary token for wolethereader org models (STORM-OS-ASR-SMALL)
@@ -64,130 +52,6 @@ def _torch_cuda_available() -> bool:
 
 DEVICE = "cuda" if _torch_cuda_available() else "cpu"
 
-
-# ── Groq Whisper Large v3 (primary ASR) ──
-# Groq runs whisper-large-v3 on LPU hardware — 300x real-time, sub-second latency.
-# Free tier: 2,000 req/day, 28,800 audio seconds/day (8 hours).
-
-# Whisper language code -> Adunni LanguageCode
-WHISPER_TO_ADUNNI_CODE = {
-    "en": "en-NG",
-    "yo": "yo",
-    "ha": "ha",
-    "ig": "ig",
-    "pcm": "pcm",  # Pidgin may be detected as "en" by large-v3
-}
-
-
-def _force_ipv4():
-    """Force IPv4 for all socket connections (VPS IPv6 is geo-blocked by some APIs)."""
-    import socket
-    _orig_getaddrinfo = socket.getaddrinfo
-    def _ipv4_getaddrinfo(host, port, *args, **kwargs):
-        results = _orig_getaddrinfo(host, port, *args, **kwargs)
-        ipv4 = [r for r in results if r[0] == socket.AF_INET]
-        return ipv4 if ipv4 else results
-    socket.getaddrinfo = _ipv4_getaddrinfo
-
-
-def _groq_transcribe(audio_path: str, language: Optional[str] = None) -> Optional[dict]:
-    """
-    Transcribe audio using Groq Whisper Large v3 API.
-
-    Args:
-        audio_path: Path to audio file (any format Groq supports: wav, mp3, flac, etc.)
-        language: Optional language hint (Adunni code). If None, Groq auto-detects.
-
-    Returns:
-        { text, language, confidence, provider: "groq" } or None if Groq fails.
-    """
-    if not GROQ_API_KEY:
-        return None
-
-    try:
-        _force_ipv4()
-        import urllib.request
-        import urllib.error
-        import mimetypes
-
-        # Build multipart/form-data request
-        boundary = "----AdunniBoundary7MA4YWxkTrZu0gW"
-        filename = os.path.basename(audio_path)
-
-        # Determine content type
-        ext = os.path.splitext(filename)[1].lower()
-        content_type_map = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".flac": "audio/flac", ".webm": "audio/webm", ".ogg": "audio/ogg", ".m4a": "audio/mp4"}
-        ct = content_type_map.get(ext, "audio/wav")
-
-        with open(audio_path, "rb") as f:
-            audio_data = f.read()
-
-        # Build form fields
-        fields = []
-        # Model field
-        fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n{GROQ_WHISPER_MODEL}\r\n')
-        # Response format: verbose_json to get language detection
-        fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\nverbose_json\r\n')
-        # Temperature
-        fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="temperature"\r\n\r\n0.0\r\n')
-
-        # Language hint (convert Adunni code to Whisper code)
-        if language and language in LANG_TO_WHISPER_CODE:
-            whisper_lang = LANG_TO_WHISPER_CODE[language]
-            fields.append(f'--{boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n{whisper_lang}\r\n')
-
-        body_parts = []
-        for field in fields:
-            body_parts.append(field.encode("utf-8"))
-
-        # Audio file field
-        body_parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\nContent-Type: {ct}\r\n\r\n'.encode("utf-8"))
-        body_parts.append(audio_data)
-        body_parts.append(f'\r\n--{boundary}--\r\n'.encode("utf-8"))
-
-        body = b"".join(body_parts)
-
-        # Make request — use curl User-Agent to avoid Cloudflare 1010 blocking
-        req = urllib.request.Request(
-            GROQ_API_URL,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "User-Agent": "curl/8.5.0",
-            },
-            method="POST",
-        )
-
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = _json.loads(resp.read().decode("utf-8"))
-
-        text = result.get("text", "").strip()
-        detected_lang = result.get("language", "en")
-
-        # Map Whisper language code to Adunni code
-        adunni_lang = WHISPER_TO_ADUNNI_CODE.get(detected_lang, "en-NG")
-
-        # If text is empty, return empty result
-        if not text:
-            return {"text": "", "language": adunni_lang, "confidence": 0.5, "provider": "groq"}
-
-        log.info(f"Groq transcribed: lang={adunni_lang} text=\"{text[:80]}\"")
-
-        return {
-            "text": text,
-            "language": adunni_lang,
-            "confidence": 0.95,  # Groq large-v3 is very accurate
-            "provider": "groq",
-        }
-
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")[:200]
-        log.warning(f"Groq API error: {e.code} {err_body}")
-        return None
-    except Exception as e:
-        log.warning(f"Groq transcription failed: {e}")
-        return None
 
 # ── Model registry ──
 # Per-language ASR models from NCAIR1 (dedicated, fine-tuned for each language)

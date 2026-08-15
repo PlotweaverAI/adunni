@@ -42,7 +42,3 @@ services:
   session-store:
     environment:
       DATABASE_URL: postgres://adunni:${POSTGRES_PASSWORD}@postgres:5432/adunni
-
-  asr-engine:
-    environment:
-      GROQ_API_KEY: ${GROQ_API_KEY}
