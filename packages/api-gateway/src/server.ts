@@ -930,26 +930,17 @@ wss.on('connection', async (ws: WebSocket, req) => {
     turn: { speaker: 'ai', language: 'en-NG', text: greeting, confidence: 1.0 },
   }));
 
-  // Generate TTS for the greeting
+  // Generate TTS for the greeting — always send to frontend (it handles Tavus echo)
   if (config && stormTts) {
     try {
       const ttsResult = await stormTts.generate(greeting, 'en-NG');
-      if (videoConversation && tavus) {
-        const vc = videoConversation as { conversationId: string; conversationUrl: string };
-        tavus.sendEchoMessage(vc.conversationUrl, vc.conversationId, '', {
-          audio: ttsResult.audio.toString('base64'),
-          sampleRate: ttsResult.sampleRate,
-          inferenceId: `greeting-${sessionId}`,
-          done: true,
-        }).catch((e: Error) => console.error('[gateway] greeting audio echo error:', e));
-      } else {
-        ws.send(JSON.stringify({
-          type: 'audio',
-          audioBase64: ttsResult.audio.toString('base64'),
-          format: ttsResult.format,
-          sampleRate: ttsResult.sampleRate,
-        }));
-      }
+      ws.send(JSON.stringify({
+        type: 'audio',
+        audioBase64: ttsResult.audio.toString('base64'),
+        format: ttsResult.format,
+        sampleRate: ttsResult.sampleRate,
+        language: 'en-NG',
+      }));
     } catch (err) {
       console.error('[gateway] greeting TTS error:', err instanceof Error ? err.message : err);
     }
@@ -989,7 +980,7 @@ async function processUserUtteranceWithLanguage(
   config: ClientConfig | null,
   ws: WebSocket,
   currentTurnIndex: number,
-  videoConversation: { conversationId: string; conversationUrl: string } | null = null
+  _videoConversation: { conversationId: string; conversationUrl: string } | null = null
 ) {
   const startTime = Date.now();
 
@@ -1017,14 +1008,6 @@ async function processUserUtteranceWithLanguage(
       latencyMs: Date.now() - startTime,
     }),
   }).catch(() => {});
-
-  // Send user transcript to video face as echo
-  if (videoConversation && tavus) {
-    tavus.sendEchoMessage(videoConversation.conversationUrl, videoConversation.conversationId, text, {
-      inferenceId: `user-${sessionId}-${currentTurnIndex}`,
-      done: true,
-    }).catch((e: Error) => console.error('[gateway] video echo (user) error:', e));
-  }
 
   // Skip user translation for orchestrator - send original text directly
   // The mock LLM handles native language keywords. Translation is only for display.

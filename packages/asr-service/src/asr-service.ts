@@ -233,13 +233,15 @@ export class AsrServiceImpl implements AsrService {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(15000),
         });
         if (resp.ok) {
           this.engineAvailable = true;
           return await resp.json() as { language: LanguageCode; confidence: number };
         }
       } catch {
+        // Don't permanently cache engineAvailable=false — the engine might be slow
+        // but still working (CPU-based Whisper can take 10+ seconds)
         this.engineAvailable = false;
         // Fall back to mock detection
       }
@@ -257,5 +259,19 @@ export class AsrServiceImpl implements AsrService {
       engineAvailable: this.engineAvailable,
     };
     return info;
+  }
+
+  /** Check engine health asynchronously and update engineAvailable */
+  async checkEngineHealth(): Promise<boolean> {
+    if (!this.engineUrl) return false;
+    try {
+      const resp = await fetch(`${this.engineUrl}/health`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      this.engineAvailable = resp.ok;
+    } catch {
+      this.engineAvailable = false;
+    }
+    return this.engineAvailable;
   }
 }

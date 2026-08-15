@@ -10,7 +10,11 @@ const app = express();
 app.use(express.raw({ type: 'application/octet-stream', limit: '25mb' }));
 app.use(express.json({ limit: '25mb' }));
 
-app.get('/health', (_req, res) => res.json({ status: 'ok', provider: asrService.getProviderInfo() }));
+app.get('/health', async (_req, res) => {
+  // Do a fresh engine health check instead of returning stale cached status
+  await asrService.checkEngineHealth();
+  res.json({ status: 'ok', provider: asrService.getProviderInfo() });
+});
 
 app.post('/detect-language', async (req, res) => {
   try {
@@ -63,7 +67,7 @@ app.post('/transcribe/partial', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(60000),
     });
     const data = await resp.text();
     res.status(resp.status).type('json').send(data);
@@ -84,7 +88,7 @@ app.post('/vad', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(30000),
     });
     const data = await resp.text();
     res.status(resp.status).type('json').send(data);
