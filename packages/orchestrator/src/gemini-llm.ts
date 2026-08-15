@@ -61,19 +61,84 @@ interface GeminiGenerateResponse {
 
 export class GeminiLlmProvider implements LlmProvider {
   name = 'gemini-flash';
-  private apiKey: string;
+  private apiKeys: string[] = [];
+  private currentKeyIndex = 0;
+  private keyErrorCounts: Map<number, number> = new Map();
 
   constructor(apiKey?: string) {
-    this.apiKey = apiKey ?? process.env.GEMINI_API_KEY ?? '';
-    if (!this.apiKey) {
-      console.warn('[gemini-llm] GEMINI_API_KEY not set — provider will fail on requests');
+    // Support multiple API keys for rotation:
+    // - Single key via constructor arg
+    // - Multiple keys via GEMINI_API_KEYS env var (comma-separated)
+    // - Single key via GEMINI_API_KEY env var
+    if (apiKey) {
+      this.apiKeys.push(apiKey);
+    }
+    const multiKeys = process.env.GEMINI_API_KEYS;
+    if (multiKeys) {
+      this.apiKeys.push(...multiKeys.split(',').map(k => k.trim()).filter(k => k.length > 0));
+    }
+    const singleKey = process.env.GEMINI_API_KEY;
+    if (singleKey && !this.apiKeys.includes(singleKey)) {
+      this.apiKeys.push(singleKey);
+    }
+
+    // Deduplicate
+    this.apiKeys = [...new Set(this.apiKeys)];
+
+    if (this.apiKeys.length === 0) {
+      console.warn('[gemini-llm] No API keys set — provider will fail on requests');
+    } else {
+      console.log(`[gemini-llm] Loaded ${this.apiKeys.length} API key(s) for rotation`);
     }
   }
 
-  async complete(request: LlmRequest): Promise<LlmResponse> {
-    if (!this.apiKey) {
-      throw new Error('GEMINI_API_KEY is not set');
+  private getNextKey(): string {
+    if (this.apiKeys.length === 0) {
+      throw new Error('No Gemini API keys available');
     }
+    const key = this.apiKeys[this.currentKeyIndex];
+    return key;
+  }
+
+  private rotateKey(): void {
+    this.keyErrorCounts.set(this.currentKeyIndex, (this.keyErrorCounts.get(this.currentKeyIndex) ?? 0) + 1);
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
+    console.log(`[gemini-llm] Rotated to API key #${this.currentKeyIndex + 1} (of ${this.apiKeys.length})`);
+  }
+
+  async complete(request: LlmRequest): Promise<LlmResponse> {
+    if (this.apiKeys.length === 0) {
+      throw new Error('No Gemini API keys available');
+    }
+
+    let lastError: Error | null = null;
+
+    // Try each key once, rotating on quota errors
+    for (let attempt = 0; attempt < this.apiKeys.length; attempt++) {
+      const apiKey = this.getNextKey();
+      try {
+        return await this.completeWithKey(apiKey, request);
+      } catch (err) {
+        lastError = err as Error;
+        const errMsg = err instanceof Error ? err.message : String(err);
+
+        // Check if this is a quota/rate limit error — rotate to next key
+        if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
+          console.warn(`[gemini-llm] Key #${this.currentKeyIndex + 1} hit quota limit, rotating...`);
+          this.rotateKey();
+          continue;
+        }
+
+        // For other errors, don't rotate — just throw
+        throw err;
+      }
+    }
+
+    // All keys exhausted
+    throw new Error(`All ${this.apiKeys.length} Gemini API keys exhausted (quota). Last error: ${lastError?.message}`);
+  }
+
+  private async completeWithKey(apiKey: string, request: LlmRequest): Promise<LlmResponse> {
 
     // Build system instruction with language directive
     const systemParts: string[] = [request.systemPrompt];
@@ -120,7 +185,7 @@ export class GeminiLlmProvider implements LlmProvider {
       body.tools = tools;
     }
 
-    const url = `${GEMINI_ENDPOINT}?key=${this.apiKey}`;
+    const url = `${GEMINI_ENDPOINT}?key=${apiKey}`;
 
     // Retry on 503 (overloaded) with exponential backoff
     let resp: Response | null = null;
@@ -201,9 +266,10 @@ export class GeminiLlmProvider implements LlmProvider {
    * Falls back to non-streaming if streaming fails.
    */
   async streamComplete(request: LlmRequest, onChunk: (text: string) => void): Promise<LlmResponse> {
-    if (!this.apiKey) {
-      throw new Error('GEMINI_API_KEY is not set');
+    if (this.apiKeys.length === 0) {
+      throw new Error('No Gemini API keys available');
     }
+    const apiKey = this.getNextKey();
 
     // Build the same request body as complete()
     const systemParts: string[] = [request.systemPrompt];
@@ -238,7 +304,7 @@ export class GeminiLlmProvider implements LlmProvider {
     };
     if (tools.length > 0) body.tools = tools;
 
-    const url = `${GEMINI_STREAM_ENDPOINT}?key=${this.apiKey}&alt=sse`;
+    const url = `${GEMINI_STREAM_ENDPOINT}?key=${apiKey}&alt=sse`;
 
     try {
       const resp = await fetch(url, {
