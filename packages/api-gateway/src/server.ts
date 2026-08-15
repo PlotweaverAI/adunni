@@ -79,6 +79,44 @@ const COMMON_AI_RESPONSES = [
 ];
 const PREWARM_LANGS: LanguageCode[] = ['yo', 'ha', 'ig'];
 
+// ── TTS audio cache: pre-generate audio for common responses ──
+// Key: "text|language" -> base64 WAV audio
+const ttsAudioCache = new Map<string, string>();
+
+async function prewarmTtsCache(): Promise<void> {
+  if (!stormTts) return;
+  const commonTexts = [
+    'Hello! I\'m Adunni, your banking assistant. How are you doing today?',
+    'Done. I checked your account balance.',
+    'Done. I checked the transfer status.',
+    'Done. Your transfer limit has been updated successfully.',
+    'I can help with account balance, transfer status, or transfer limits.',
+    'I\'m sorry, I didn\'t catch that. Could you please repeat?',
+    'No problem. I have cancelled the action. Is there anything else I can help with?',
+    'Let me connect you to a human agent.',
+  ];
+  const langs: LanguageCode[] = ['en-NG', 'pcm'];
+  console.log(`[gateway] Pre-warming TTS cache (${commonTexts.length} texts × ${langs.length} langs)...`);
+  for (const lang of langs) {
+    for (const text of commonTexts) {
+      const key = `${text}|${lang}`;
+      try {
+        const result = await stormTts.generate(text, lang);
+        ttsAudioCache.set(key, result.audio.toString('base64'));
+      } catch {
+        // Non-critical — cache miss will generate on demand
+      }
+    }
+  }
+  console.log(`[gateway] TTS cache pre-warmed: ${ttsAudioCache.size} entries`);
+}
+
+// Check TTS cache before generating
+function getCachedTts(text: string, lang: LanguageCode): string | null {
+  const key = `${text}|${lang}`;
+  return ttsAudioCache.get(key) ?? null;
+}
+
 function formatActionSuccessMessage(actionName: string, confirmed = false): string {
   switch (actionName) {
     case 'get_balance':
@@ -144,6 +182,9 @@ const authMiddleware = createAuthMiddleware(JWT_SECRET);
 
 const server = createSecureServer(app, PORT, { certPath: TLS_CERT, keyPath: TLS_KEY, forceHttps: !!(TLS_CERT && TLS_KEY) });
 const wss = new WebSocketServer({ server });
+
+// Pre-warm TTS cache on startup (non-blocking)
+prewarmTtsCache().catch(err => console.warn('[gateway] TTS pre-warm failed:', err instanceof Error ? err.message : err));
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: '0.1.0' }));
 
@@ -710,6 +751,14 @@ wss.on('connection', async (ws: WebSocket, req) => {
                   if (!detectedLanguage && partialResult.language) {
                     detectedLanguage = partialResult.language;
                   }
+                  // Speculative: pre-fetch context while user is still speaking
+                  // so it's ready when the final audio arrives
+                  const wsSpec = ws as WebSocket & { speculativeContext?: Promise<ConversationContext | null> | null };
+                  if (!wsSpec.speculativeContext && config) {
+                    wsSpec.speculativeContext = fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`, {
+                      signal: AbortSignal.timeout(3000),
+                    }).then(r => r.json() as Promise<ConversationContext>).catch(() => null);
+                  }
                   ws.send(JSON.stringify({
                     type: 'transcript',
                     turn: {
@@ -966,13 +1015,28 @@ async function processUserUtteranceWithLanguage(
     // Pidgin uses text as-is
   }
 
-  // Get context — use short timeout to avoid blocking if session store is slow
+  // Get context — use speculative pre-fetched context if available, otherwise fetch
   let context: ConversationContext;
   try {
-    const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    context = await ctxResp.json() as ConversationContext;
+    // Check if we have a speculative context from partial transcription
+    const wsWithSpec = ws as WebSocket & { speculativeContext?: Promise<ConversationContext | null> | null };
+    if (wsWithSpec.speculativeContext) {
+      const speculative = await wsWithSpec.speculativeContext;
+      wsWithSpec.speculativeContext = null;
+      if (speculative) {
+        context = speculative;
+      } else {
+        const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        context = await ctxResp.json() as ConversationContext;
+      }
+    } else {
+      const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      context = await ctxResp.json() as ConversationContext;
+    }
   } catch {
     // Context fetch failed — continue with empty context (don't block the response)
     console.warn('[gateway] Context fetch failed, continuing with empty context');
@@ -1015,21 +1079,157 @@ async function processUserUtteranceWithLanguage(
     languageConfidence,
   };
 
-  const orchResp = await fetch(`${ORCHESTRATOR_URL}/process`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(orchRequest),
-  });
+  // ── Streaming orchestrator call ──
+  // Use /process-stream to get LLM tokens as they're generated.
+  // Buffer text into sentences and start TTS for each sentence as soon as it's ready,
+  // so the user hears audio while the LLM is still generating.
+  const aiLanguage = language;
+  let aiText = '';
+  let actionId: string | undefined;
+  let orchResult: OrchestratorResponse | null = null;
 
-  if (!orchResp.ok) {
-    const orchErrBody = await orchResp.text();
-    console.error('[gateway] Orchestrator error:', orchResp.status, orchErrBody.substring(0, 300));
+  // Helper: split text into complete sentences
+  function splitSentences(text: string): string[] {
+    return text.match(/[^.!?]+[.!?]+|\S+$/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+  }
+
+  // Helper: generate TTS for a sentence and send to frontend (with cache)
+  async function ttsAndSend(text: string, chunkIdx: number, isLast: boolean): Promise<void> {
+    if (!stormTts || !text.trim()) return;
+    try {
+      // Check cache first
+      const cached = getCachedTts(text, aiLanguage);
+      if (cached) {
+        ws.send(JSON.stringify({
+          type: 'audio',
+          audioBase64: cached,
+          format: 'wav' as const,
+          sampleRate: 24000,
+          chunkIndex: chunkIdx,
+          isLast,
+          language: aiLanguage,
+        }));
+        return;
+      }
+      const result = await stormTts.generate(text, aiLanguage);
+      // Cache the result for future use
+      ttsAudioCache.set(`${text}|${aiLanguage}`, result.audio.toString('base64'));
+      ws.send(JSON.stringify({
+        type: 'audio',
+        audioBase64: result.audio.toString('base64'),
+        format: 'wav' as const,
+        sampleRate: 24000,
+        chunkIndex: chunkIdx,
+        isLast,
+        language: aiLanguage,
+      }));
+    } catch (err) {
+      console.error(`[gateway] TTS chunk ${chunkIdx} failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  let ttsChunkIndex = 0;
+  let textBuffer = '';
+  let ttsDone = false;
+
+  // Start streaming TTS as sentences become available
+  async function flushSentences(finalFlush: boolean): Promise<void> {
+    const sentences = splitSentences(textBuffer);
+    if (sentences.length === 0) return;
+
+    // Keep the last incomplete sentence in the buffer (unless final flush)
+    const completeCount = finalFlush ? sentences.length : Math.max(0, sentences.length - 1);
+    for (let i = 0; i < completeCount; i++) {
+      const sentence = sentences[i];
+      const isLast = finalFlush && i === sentences.length - 1;
+      await ttsAndSend(sentence, ttsChunkIndex++, isLast);
+    }
+
+    // Update buffer to remaining incomplete sentence
+    if (finalFlush) {
+      textBuffer = '';
+    } else {
+      textBuffer = sentences[sentences.length - 1] || '';
+    }
+  }
+
+  try {
+    const orchResp = await fetch(`${ORCHESTRATOR_URL}/process-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(orchRequest),
+    });
+
+    if (!orchResp.ok || !orchResp.body) {
+      // Fall back to non-streaming
+      console.warn('[gateway] Streaming orchestrator failed, falling back to /process');
+      const fallbackResp = await fetch(`${ORCHESTRATOR_URL}/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orchRequest),
+      });
+      if (!fallbackResp.ok) {
+        const orchErrBody = await fallbackResp.text();
+        console.error('[gateway] Orchestrator error:', fallbackResp.status, orchErrBody.substring(0, 300));
+        ws.send(JSON.stringify({ type: 'error', message: 'AI processing failed' }));
+        ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: currentTurnIndex + 1 }));
+        return;
+      }
+      orchResult = await fallbackResp.json() as OrchestratorResponse;
+    } else {
+      // Parse SSE stream
+      const reader = orchResp.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuffer += decoder.decode(value, { stream: true });
+
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr) continue;
+
+          try {
+            const event = JSON.parse(jsonStr);
+            if (event.type === 'text' && event.chunk) {
+              // Accumulate text and flush complete sentences to TTS
+              textBuffer += event.chunk;
+              aiText += event.chunk;
+              // Check for sentence boundaries
+              if (/[.!?]/.test(event.chunk)) {
+                await flushSentences(false);
+              }
+            } else if (event.type === 'done' && event.response) {
+              orchResult = event.response as OrchestratorResponse;
+            } else if (event.type === 'error') {
+              console.error('[gateway] Orchestrator stream error:', event.message);
+            }
+          } catch {
+            // Partial JSON, skip
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[gateway] Orchestrator fetch error:', err);
     ws.send(JSON.stringify({ type: 'error', message: 'AI processing failed' }));
     ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: currentTurnIndex + 1 }));
     return;
   }
 
-  const orchResult = await orchResp.json() as OrchestratorResponse;
+  if (!orchResult) {
+    console.error('[gateway] No orchestrator result received');
+    ws.send(JSON.stringify({ type: 'error', message: 'AI returned no response' }));
+    ws.send(JSON.stringify({ type: 'turn.complete', turnIndex: currentTurnIndex + 1 }));
+    return;
+  }
+
   const decision = orchResult.decision;
 
   if (!decision) {
@@ -1041,9 +1241,8 @@ async function processUserUtteranceWithLanguage(
 
   console.log(`[gateway] Orchestrator decision: type=${decision.type}`);
 
-  let aiText = '';
-  let actionId: string | undefined;
-
+  // For 'respond' decisions, aiText was already accumulated from the stream.
+  // For action/escalate/clarify decisions, construct aiText from the decision.
   if (decision.type === 'respond') {
     aiText = decision.text;
   } else if (decision.type === 'action') {
@@ -1135,13 +1334,9 @@ async function processUserUtteranceWithLanguage(
     aiText = decision.prompt;
   }
 
-  // AI always responds in the user's detected language
-  const aiLanguage = language;
+  // AI always responds in the user's detected language (aiLanguage already set above)
 
   // ── Translate AI response back to user's language if different ──
-  // With a real LLM (Gemini), the AI already responds in the user's language natively,
-  // so we skip NLLB translation. Only translate when using the mock LLM (English-only).
-  // Skip translation for Pidgin <-> English (mutually intelligible)
   const usingRealLlm = !!process.env.GEMINI_API_KEY;
   const needsAiTranslation = !usingRealLlm && language !== targetLang && aiText &&
     !((language === 'pcm' && targetLang === 'en-NG') || (language === 'en-NG' && targetLang === 'pcm'));
@@ -1154,7 +1349,7 @@ async function processUserUtteranceWithLanguage(
       console.error('[gateway] translation error (AI):', err);
     }
   } else if (language === 'pcm' && targetLang === 'en-NG') {
-    aiTextTranslated = aiText; // Pidgin uses English text as-is
+    aiTextTranslated = aiText;
   }
 
   // Fire-and-forget session store (don't block on DB)
@@ -1173,52 +1368,50 @@ async function processUserUtteranceWithLanguage(
     turn: { speaker: 'ai', language: aiLanguage, text: aiTextTranslated, confidence: orchResult.confidence, englishTranslation: needsAiTranslation ? aiText : undefined },
   }));
 
-  // ── TTS: synthesize AI response as real audio (streaming sentence-by-sentence) ──
-  // STORM TTS generates Nigerian female voice audio (Morenike/Amina).
-  // We stream sentence-by-sentence so the first sentence plays while later ones are still generating.
-  // Audio is ALWAYS sent to the frontend via WebSocket. The frontend then:
-  //   - Plays it through the speakers (audio playback)
-  //   - Forwards it to Tavus via Daily sendAppMessage for lip-sync (client-side)
-  // This is the correct Tavus API pattern — echo messages go through Daily's data channel,
-  // not through server-side WebSocket connections to the Daily room URL.
+  // ── TTS: Flush remaining text buffer and send end marker ──
+  // For 'respond' decisions, some TTS chunks were already sent during the LLM stream.
+  // For action/escalate/clarify decisions, no streaming happened — generate all TTS now.
   if (config && stormTts) {
-    try {
-      let chunkIndex = 0;
-      await stormTts.generateStream(aiTextTranslated, aiLanguage, (chunkAudio, idx) => {
-        const chunkBase64 = chunkAudio.toString('base64');
-        const isLast = idx === -1;
-
-        // Always send audio to frontend — it handles both playback AND Tavus echo
-        ws.send(JSON.stringify({
-          type: 'audio',
-          audioBase64: chunkBase64,
-          format: 'wav' as const,
-          sampleRate: 24000,
-          chunkIndex: chunkIndex++,
-          isLast: isLast,
-          language: aiLanguage,
-        }));
-      });
-
-      // Send end marker so frontend knows the audio stream is complete
+    if (decision.type === 'respond' && textBuffer) {
+      // Flush remaining buffered text from the LLM stream
+      try {
+        await flushSentences(true);
+      } catch (err) {
+        console.error('[gateway] TTS flush error:', err instanceof Error ? err.message : err);
+      }
+      if (!ttsDone) {
+        ws.send(JSON.stringify({ type: 'audio', audioBase64: '', format: 'wav', sampleRate: 24000, isLast: true, language: aiLanguage }));
+        ttsDone = true;
+      }
+    } else if (decision.type !== 'respond' && aiTextTranslated) {
+      // Non-respond decisions: generate TTS for the full text (no streaming happened)
+      try {
+        let chunkIndex = 0;
+        await stormTts.generateStream(aiTextTranslated, aiLanguage, (chunkAudio, idx) => {
+          const chunkBase64 = chunkAudio.toString('base64');
+          const isLast = idx === -1;
+          ws.send(JSON.stringify({
+            type: 'audio',
+            audioBase64: chunkBase64,
+            format: 'wav' as const,
+            sampleRate: 24000,
+            chunkIndex: chunkIndex++,
+            isLast,
+            language: aiLanguage,
+          }));
+        });
+        ws.send(JSON.stringify({ type: 'audio', audioBase64: '', format: 'wav', sampleRate: 24000, isLast: true, language: aiLanguage }));
+        ttsDone = true;
+      } catch (err) {
+        console.error('[gateway] STORM TTS error:', err instanceof Error ? err.message : err);
+      }
+    } else if (!ttsDone) {
+      // No TTS was sent — send end marker
       ws.send(JSON.stringify({ type: 'audio', audioBase64: '', format: 'wav', sampleRate: 24000, isLast: true, language: aiLanguage }));
-    } catch (err) {
-      console.error('[gateway] STORM TTS error:', err instanceof Error ? err.message : err);
-      // STORM TTS failed — send text to frontend so it can use browser SpeechSynthesis
-      // and also send text echo to Tavus for lip-sync
-      ws.send(JSON.stringify({
-        type: 'audio',
-        audioBase64: '',
-        format: 'wav',
-        sampleRate: 24000,
-        isLast: true,
-        language: aiLanguage,
-        textFallback: aiTextTranslated,
-      }));
+      ttsDone = true;
     }
   } else {
-    // No STORM TTS configured — send text to frontend for browser SpeechSynthesis
-    // The frontend will also send it as text echo to Tavus for lip-sync
+    // No STORM TTS configured — send text fallback
     ws.send(JSON.stringify({
       type: 'audio',
       audioBase64: '',

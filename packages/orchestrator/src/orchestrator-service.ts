@@ -326,6 +326,186 @@ Escalation rules:
     return confirmWords.some((w) => lower.includes(w)) && !denyWords.some((w) => lower.includes(w));
   }
 
+  /**
+   * Streaming version of process() — calls onText for each text chunk from the LLM.
+   * Returns the final OrchestratorResponse (same as process()).
+   * 
+   * For tool calls (actions), streaming is not possible — the full LLM response
+   * is needed to determine the tool call. In that case, onText is not called
+   * and the response is returned normally.
+   */
+  async processStream(
+    request: OrchestratorRequest,
+    onText: (text: string) => void
+  ): Promise<OrchestratorResponse> {
+    const startTime = Date.now();
+    const { config, context, userUtterance, detectedLanguage, languageConfidence } = request;
+
+    if (!config) {
+      throw new Error('Client config not loaded');
+    }
+
+    // Handle confirmation/action cases without streaming (they need full response)
+    if (context.dialogueState.awaitingConfirmation && context.pendingAction) {
+      const confirmed = this.detectConfirmation(userUtterance, detectedLanguage);
+      const decision: OrchestratorDecision = {
+        type: 'confirm_action',
+        actionId: context.pendingAction.id,
+        confirmed,
+        language: detectedLanguage,
+      };
+      return {
+        decision,
+        confidence: 0.9,
+        updatedContext: this.updateContext(context, decision, detectedLanguage),
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
+    if (languageConfidence < config.escalationRules.confidenceThreshold) {
+      const decision: OrchestratorDecision = {
+        type: 'escalate',
+        reason: 'low_confidence' as EscalationReason,
+        message: config.escalationRules.handoffMessage ?? 'Let me connect you to a human agent.',
+        language: detectedLanguage,
+      };
+      return {
+        decision,
+        confidence: languageConfidence,
+        updatedContext: this.updateContext(context, decision, detectedLanguage),
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
+    const systemPrompt = this.buildSystemPrompt(config);
+    const tools = this.buildTools(config.intents);
+
+    const allTurns = context.turns;
+    const recentTurns = allTurns.slice(-8);
+    const olderTurns = allTurns.slice(0, -8);
+
+    const conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = olderTurns.length > 0
+      ? [{ role: 'assistant', content: `[Previous conversation summary: ${olderTurns.length} earlier turns]` }]
+      : [];
+    for (const turn of recentTurns) {
+      conversationHistory.push({
+        role: (turn.speaker === 'ai' ? 'assistant' : 'user') as 'user' | 'assistant',
+        content: turn.text,
+      });
+    }
+
+    const langName = LANGUAGE_NAMES[detectedLanguage] ?? detectedLanguage;
+    const userMessageWithContext = `[Detected language: ${langName}]\n${userUtterance}`;
+
+    let llmResponse: LlmResponse;
+
+    // Try streaming if the LLM supports it
+    if (this.llm && 'streamComplete' in this.llm && typeof this.llm.streamComplete === 'function') {
+      try {
+        llmResponse = await this.llm.streamComplete(
+          {
+            systemPrompt,
+            conversationHistory,
+            userMessage: userMessageWithContext,
+            tools,
+            maxTokens: 300,
+            temperature: 0.7,
+          },
+          (chunk: string) => {
+            // Only stream text chunks — if it's a tool call, don't stream
+            if (chunk && chunk.trim()) {
+              onText(chunk);
+            }
+          }
+        );
+      } catch (err) {
+        console.warn('[orchestrator] streaming failed, falling back to complete:', err instanceof Error ? err.message : err);
+        llmResponse = await this.llm.complete({
+          systemPrompt,
+          conversationHistory,
+          userMessage: userMessageWithContext,
+          tools,
+          maxTokens: 300,
+          temperature: 0.7,
+        });
+      }
+    } else if (this.llm) {
+      llmResponse = await this.llm.complete({
+        systemPrompt,
+        conversationHistory,
+        userMessage: userMessageWithContext,
+        tools,
+        maxTokens: 300,
+        temperature: 0.7,
+      });
+    } else {
+      // No LLM — use mock
+      llmResponse = await new MockLlmProvider().complete({
+        systemPrompt,
+        conversationHistory,
+        userMessage: userMessageWithContext,
+        tools,
+        maxTokens: 300,
+        temperature: 0.7,
+      });
+    }
+
+    let decision: OrchestratorDecision;
+    let intentName: string | undefined;
+    let confidence = 0.85;
+
+    if (llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
+      // Tool call — don't use streamed text, construct the action decision
+      const toolCall = llmResponse.toolCalls[0];
+      const intent = config.intents.find((i) => i.actionName === toolCall.name);
+
+      if (!intent) {
+        decision = {
+          type: 'escalate',
+          reason: 'out_of_scope' as EscalationReason,
+          message: config.escalationRules.handoffMessage ?? 'Let me connect you to a human agent.',
+          language: detectedLanguage,
+        };
+      } else if (intent.requiresConfirmation) {
+        intentName = intent.name;
+        decision = {
+          type: 'action',
+          intentName: intent.name,
+          actionName: intent.actionName,
+          parameters: toolCall.arguments,
+          requiresConfirmation: true,
+          confirmationPrompt: `I will ${intent.description.toLowerCase()}. Do you confirm this action?`,
+          language: detectedLanguage,
+        };
+      } else {
+        intentName = intent.name;
+        decision = {
+          type: 'action',
+          intentName: intent.name,
+          actionName: intent.actionName,
+          parameters: toolCall.arguments,
+          requiresConfirmation: false,
+          confirmationPrompt: '',
+          language: detectedLanguage,
+        };
+      }
+    } else {
+      decision = {
+        type: 'respond',
+        text: llmResponse.text,
+        language: detectedLanguage,
+      };
+    }
+
+    return {
+      decision,
+      intentName,
+      confidence,
+      updatedContext: this.updateContext(context, decision, detectedLanguage),
+      latencyMs: Date.now() - startTime,
+    };
+  }
+
   private updateContext(context: ConversationContext, decision: OrchestratorDecision, language: LanguageCode): ConversationContext {
     return {
       ...context,

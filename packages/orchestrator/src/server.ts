@@ -34,6 +34,36 @@ app.post('/process', async (req, res) => {
   }
 });
 
+// Streaming endpoint — emits SSE events as LLM generates text
+// Events:
+//   data: {"type":"text","chunk":"Hello"}    — text chunk from LLM
+//   data: {"type":"done","response":{...}}   — final orchestrator response
+app.post('/process-stream', async (req, res) => {
+  try {
+    const request = req.body as OrchestratorRequest;
+    if (!request.sessionId || !request.userUtterance) {
+      return res.status(400).json({ error: 'sessionId and userUtterance are required' });
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+
+    const response = await orchestrator.processStream(request, (chunk: string) => {
+      res.write(`data: ${JSON.stringify({ type: 'text', chunk })}\n\n`);
+    });
+
+    res.write(`data: ${JSON.stringify({ type: 'done', response })}\n\n`);
+    res.end();
+  } catch (err) {
+    console.error('[orchestrator] process-stream error:', err);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: 'Orchestration failed' })}\n\n`);
+    res.end();
+  }
+});
+
 app.post('/system-prompt', (req, res) => {
   try {
     const { config } = req.body;
