@@ -936,6 +936,9 @@ async function processUserUtteranceWithLanguage(
     turn: { speaker: 'user', language, text, confidence: languageConfidence },
   }));
 
+  // Send "thinking" status so frontend shows immediate feedback
+  ws.send(JSON.stringify({ type: 'thinking' }));
+
   // Fire-and-forget session store (don't block on DB)
   fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/turns`, {
     method: 'POST',

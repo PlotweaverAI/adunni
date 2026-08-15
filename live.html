@@ -311,10 +311,8 @@ function removeThinking(){var t=document.getElementById('thinking');if(t)t.remov
 var audioCtx=null;
 function stopCurrentAudio(){
   if(currentAudioSource){try{currentAudioSource.stop();}catch(e){}currentAudioSource=null;}
-  if(speechSynthesis)speechSynthesis.cancel();
 }
 function playTtsAudio(base64,format,sampleRate){
-  if(speechSynthesis) speechSynthesis.cancel();
   if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
   stopCurrentAudio();
   aiSpeaking=true;
@@ -366,30 +364,15 @@ function playTtsAudio(base64,format,sampleRate){
   }catch(e){console.error('[audio] error:',e);aiSpeaking=false;updateUI();}
 }
 
-// ── Browser TTS fallback ──
+// ── Browser TTS fallback (DISABLED — only use STORM TTS for Nigerian accent) ──
 function speakText(text,lang){
-  if(!speechSynthesis)return;
-  speechSynthesis.cancel();
-  var u=new SpeechSynthesisUtterance(text);
-  var langMap={'en-NG':'en-NG','pcm':'en-NG','yo':'yo-NG','ig':'ig-NG','ha':'ha-NG'};
-  u.lang=langMap[lang]||'en-NG';
-  u.rate=0.95;u.pitch=1.15;
-  var voices=speechSynthesis.getVoices();
-  if(voices.length){
-    var female=['female','samantha','victoria','karen','moira','tessa','fiona','serena','zira','hazel','susan','allison','ava','google uk english female','google us english'];
-    var match=voices.find(function(v){return v.lang===u.lang&&female.some(function(n){return v.name.toLowerCase().indexOf(n)>=0;});});
-    if(!match)match=voices.find(function(v){return v.lang&&v.lang.indexOf(u.lang.split('-')[0])===0&&female.some(function(n){return v.name.toLowerCase().indexOf(n)>=0;});});
-    if(!match)match=voices.find(function(v){return female.some(function(n){return v.name.toLowerCase().indexOf(n)>=0;});});
-    if(!match)match=voices.find(function(v){return v.lang===u.lang;});
-    if(!match)match=voices.find(function(v){return v.lang&&v.lang.indexOf(u.lang.split('-')[0])===0;});
-    if(match)u.voice=match;
-  }
-  u.onend=function(){aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);el.caption.style.display='none';updateUI();};
-  speechSynthesis.speak(u);
+  // No longer used — STORM TTS provides the Nigerian accent voice
+  // Kept as no-op for backward compatibility
+  console.warn('[tts] speakText called but browser SpeechSynthesis is disabled');
 }
 
 // ── Open mic VAD ──
-var VAD_THRESH=0.012, VAD_SPEECH_MIN=3, VAD_SILENCE_STOP=35, VAD_MS=50;
+var VAD_THRESH=0.012, VAD_SPEECH_MIN=3, VAD_SILENCE_STOP=30, VAD_MS=50;
 // Track audio levels for debugging
 var vadDebugLog=false;
 // Pre-roll buffer: keep last 300ms of audio before speech was confirmed
@@ -822,9 +805,8 @@ function handleMsg(msg){
       renderLangs(t.language?[t.language]:[]);
       el.faceRing.classList.add('pulse');setBars(true);
       if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
-      if(!videoConversation&&speechSynthesis){
-        aiSpeechFallbackTimer=setTimeout(function(){aiSpeechFallbackTimer=null;if(aiSpeaking)speakText(t.text,t.language);},8000);
-      }
+      // No browser SpeechSynthesis fallback — only use STORM TTS audio
+      // The gateway always sends audio (or textFallback if STORM fails)
       updateUI();
     }else{
       aiSpeaking=false;userSpeaking=false;removeThinking();
@@ -843,15 +825,23 @@ function handleMsg(msg){
     if(aiSpeechFallbackTimer){clearTimeout(aiSpeechFallbackTimer);aiSpeechFallbackTimer=null;}
     if(msg.audioBase64){
       // Streaming audio: play each chunk as it arrives
-      // Only cancel speech synthesis on first chunk
-      if(msg.chunkIndex===0||!msg.chunkIndex){if(speechSynthesis)speechSynthesis.cancel();stopCurrentAudio();}
+      if(msg.chunkIndex===0||!msg.chunkIndex){stopCurrentAudio();}
       playTtsAudio(msg.audioBase64,msg.format,msg.sampleRate);
       // Send echo to Tavus for lip-sync (audio modality)
       sendEchoToTavus(null,msg.audioBase64,msg.language,msg.isLast);
     } else if(msg.textFallback){
-      // No STORM TTS audio — use browser SpeechSynthesis and send text echo to Tavus
-      if(speechSynthesis)speakText(msg.textFallback,msg.language);
+      // STORM TTS failed — show text as caption only, no browser SpeechSynthesis
+      // (browser voices don't have Nigerian accent and would sound wrong)
+      console.warn('[audio] STORM TTS unavailable, showing text only:',msg.textFallback?.substring(0,60));
       sendEchoToTavus(msg.textFallback,null,msg.language,true);
+      // Mark speaking state for caption display
+      aiSpeaking=true;el.faceRing.classList.add('pulse');setBars(true);updateUI();
+      // Auto-hide caption after estimated speaking time
+      var fallbackDuration=Math.max(2000,msg.textFallback.length*80);
+      setTimeout(function(){
+        aiSpeaking=false;el.faceRing.classList.remove('pulse');setBars(false);
+        el.caption.style.display='none';updateUI();
+      },fallbackDuration);
     } else if(msg.isLast){
       // Last marker — tell Tavus the audio stream is done
       if(videoCall&&videoConversation){
@@ -862,6 +852,9 @@ function handleMsg(msg){
     }
   }else if(msg.type==='transcribing'){
     transcribing=true;updateUI();
+  }else if(msg.type==='thinking'){
+    // Gateway received our speech and is processing it
+    if(!aiSpeaking){addThinking();}
   }else if(msg.type==='turn.complete'){
     transcribing=false;updateUI();
   }else if(msg.type==='session.ended'){
@@ -899,7 +892,7 @@ function endCall(){
 }
 
 // Preload voices
-if(speechSynthesis){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=function(){speechSynthesis.getVoices();};}
+// Browser SpeechSynthesis disabled — only STORM TTS (Nigerian accent) is used
 </script>
 </body>
 </html>
