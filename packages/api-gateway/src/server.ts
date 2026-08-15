@@ -684,9 +684,9 @@ wss.on('connection', async (ws: WebSocket, req) => {
         // This avoids overwhelming the CPU ASR engine with competing requests.
 
         // ── Streaming: send partial transcripts (debounced) ──
-        // Only do partial transcription every 10 chunks (~1s of audio)
-        // to avoid overloading the CPU ASR engine
-        if (!msg.isFinal && audioBuffer.length > 0 && audioBuffer.length % 10 === 0) {
+        // Partial transcription every 5 chunks (~500ms of audio)
+        // for faster real-time feedback
+        if (!msg.isFinal && audioBuffer.length > 0 && audioBuffer.length % 5 === 0) {
           if (partialTranscribeTimer) clearTimeout(partialTranscribeTimer);
           partialTranscribeTimer = setTimeout(async () => {
             partialTranscribeTimer = null;
@@ -725,7 +725,7 @@ wss.on('connection', async (ws: WebSocket, req) => {
             } catch {
               // Partial transcription failed — non-critical
             }
-          }, 300);
+          }, 200);
         }
 
         // If marked as final, transcribe the full buffer via the ASR engine
@@ -966,9 +966,24 @@ async function processUserUtteranceWithLanguage(
     // Pidgin uses text as-is
   }
 
-  // Get context (non-blocking, already fast)
-  const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`);
-  const context = await ctxResp.json() as ConversationContext;
+  // Get context — use short timeout to avoid blocking if session store is slow
+  let context: ConversationContext;
+  try {
+    const ctxResp = await fetch(`${SESSION_STORE_URL}/sessions/${sessionId}/context`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    context = await ctxResp.json() as ConversationContext;
+  } catch {
+    // Context fetch failed — continue with empty context (don't block the response)
+    console.warn('[gateway] Context fetch failed, continuing with empty context');
+    context = {
+      sessionId,
+      turns: [],
+      referencedEntities: {},
+      lastLanguage: language,
+      dialogueState: { awaitingConfirmation: false, slots: {}, escalationActive: false },
+    };
+  }
 
   // Merge prior conversation history (cross-session memory) if available
   const wsWithHistory = ws as WebSocket & { priorHistory?: Array<{ speaker: string; text: string; language: string }> };

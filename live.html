@@ -37,9 +37,11 @@
 
   /* Fallback face (when no video) */
   .face-wrap{position:relative;width:min(220px,28vh);height:min(220px,28vh);z-index:1}
-  .face-ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(214,245,67,.3);padding:6px}
+  .face-ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(214,245,67,.3);padding:6px;transition:all .2s}
   .face-ring.pulse{inset:-6px;border:2px solid var(--lime);animation:rp 1.4s ease-out infinite}
+  .face-ring.listening{inset:-6px;border:2px solid #D9C08F;animation:rl 1.2s ease-out infinite}
   @keyframes rp{0%{box-shadow:0 0 0 0 rgba(214,245,67,.4)}100%{box-shadow:0 0 0 22px rgba(214,245,67,0)}}
+  @keyframes rl{0%{box-shadow:0 0 0 0 rgba(217,192,143,.4)}100%{box-shadow:0 0 0 22px rgba(217,192,143,0)}}
   .face-img{width:100%;height:100%;border-radius:50%;object-fit:cover;background:var(--ink-3)}
   .face-video{width:100%;height:100%;border-radius:50%;object-fit:cover;background:var(--ink-3);display:none}
   .face-video.active{display:block}
@@ -454,6 +456,17 @@ function vadCheck(){
     vadSpeechFrames++;vadSilenceFrames=0;
     if(vadSpeechFrames>=VAD_SPEECH_MIN&&!vadIsSpeaking){
       vadIsSpeaking=true;console.log('[open-mic] speech detected, rms='+rms.toFixed(4));
+      // Show listening animation: gold ring + bars
+      el.faceRing.classList.remove('pulse');
+      el.faceRing.classList.add('listening');
+      setBars(true);
+      el.bars.querySelectorAll('i').forEach(function(b){b.style.background='#D9C08F';});
+      // Show "listening" caption
+      el.caption.style.display='block';
+      el.capWho.textContent='YOU · LISTENING';
+      el.capWho.style.color='#D9C08F';
+      el.capLang.textContent='';
+      el.capText.textContent='…';
       startVadRec();
     }
     // Maintain pre-roll buffer (even when not speaking, keep recent audio)
@@ -472,6 +485,13 @@ function vadCheck(){
       if(vadSilenceFrames>=VAD_SILENCE_STOP){
         console.log('[open-mic] end of speech, silence frames='+vadSilenceFrames+' (='+((vadSilenceFrames*VAD_MS)/1000).toFixed(1)+'s)');
         vadIsSpeaking=false;vadSpeechFrames=0;vadSilenceFrames=0;
+        // Remove listening animation
+        el.faceRing.classList.remove('listening');
+        setBars(false);
+        el.bars.querySelectorAll('i').forEach(function(b){b.style.background='var(--line)';});
+        // Update caption to show transcribing
+        el.capWho.textContent='TRANSCRIBING…';
+        el.capWho.style.color='var(--dim)';
         stopVadRec();
       }
     }
@@ -493,11 +513,11 @@ async function startVadRec(){
     mediaRecorder.ondataavailable=function(e){
       if(e.data&&e.data.size>0){
         audioChunks.push(e.data);
-        // Send partial audio every ~1s (every 10 chunks at 100ms intervals)
-        // Less frequent partials = less CPU load on ASR engine
+        // Send partial audio every ~500ms (every 5 chunks at 100ms intervals)
+        // Faster partials = sooner ASR gets audio = faster response
         chunkCount++;
-        if(chunkCount%10===0&&ws&&ws.readyState===WebSocket.OPEN){
-          var partialBlob=new Blob(audioChunks.slice(-10),{type:mediaRecorder.mimeType||'audio/webm'});
+        if(chunkCount%5===0&&ws&&ws.readyState===WebSocket.OPEN){
+          var partialBlob=new Blob(audioChunks.slice(-5),{type:mediaRecorder.mimeType||'audio/webm'});
           var r=new FileReader();
           r.onload=function(){
             if(ws&&ws.readyState===WebSocket.OPEN){
@@ -793,6 +813,16 @@ function sendInterruptToTavus(){
 function handleMsg(msg){
   if(msg.type==='transcript'){
     var t=msg.turn;
+    // Partial transcripts: update caption in real-time, don't add to transcript log
+    if(t.isPartial){
+      el.caption.style.display='block';
+      el.capWho.textContent='YOU · SPEAKING';
+      el.capWho.style.color='#D9C08F';
+      el.capLang.textContent=t.language?(LANG_NAMES[t.language]||t.language):'';
+      el.capText.textContent=t.text;
+      renderLangs(t.language?[t.language]:[]);
+      return;
+    }
     if(t.speaker==='ai'){
       aiSpeaking=true;
       removeThinking();
@@ -809,7 +839,9 @@ function handleMsg(msg){
       // The gateway always sends audio (or textFallback if STORM fails)
       updateUI();
     }else{
+      // Final user transcript — clear listening state, add to log
       aiSpeaking=false;userSpeaking=false;removeThinking();
+      el.faceRing.classList.remove('listening');
       addTurn('user',t.text,t.language,t.englishTranslation);
       el.caption.style.display='block';
       el.capWho.textContent='YOU · SPEAKING';
